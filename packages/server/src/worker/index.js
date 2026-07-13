@@ -1,5 +1,5 @@
-import { BlobStore } from '../storage/blobs.js';
-import { DerivedStore } from '../storage/derived.js';
+import { BlobStore } from '../lib/storage/blobs.js';
+import { DerivedStore } from '../lib/storage/derived.js';
 import { runExtraction, DEFAULT_THUMBNAIL_TARGET } from './extract.js';
 import { claimNextJob, completeJob, failJob, enqueueExtraction } from './queue.js';
 

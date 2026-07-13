@@ -110,7 +110,6 @@ Decisions made while working through the concept. Keep this updated as we go.
 ### Deferred (not in v1)
 
 - **Share links** — want to think through the best approach first.
-- **Collections** (flat or nested) — later step.
 - **Tags and custom fields** — later step.
 - **rsync sync** of a local folder — later step.
 - Markdown editor, output editors, mobile app — future.
@@ -167,7 +166,7 @@ Tests use Node's built-in `node:test` + `assert` (zero deps); HTTP tested via
    `src/server/routes/pages.js`.
 
 **v1 complete.** All six milestones built TDD, then restructured into an npm-workspaces
-monorepo with a config-driven plugin system (see below). 105 tests green (`npm test`). Verified
+monorepo with a config-driven plugin system (see below). 138 tests green (`npm test`). Verified
 end-to-end against a live server: create-user → login → drag/upload → background
 extraction → DSL search → versioning → download → detail pages.
 
@@ -182,8 +181,11 @@ Query = whitespace-separated terms; any term negatable with leading `-`.
   `:` = contains (text) / equals (number/date); `=` = exact; `>`/`<`/… require a
   numeric or date value (else 400). Values may carry units: time `ms/s/min/h/d`,
   bytes `b/kb/mb/gb/tb` (normalized to a base number).
-- **Free text:** bare or `"quoted"` words → FTS5 MATCH (filename + extracted text).
-  Multiple positives AND together; negatives exclude.
+- **Value lists (OR within a field):** unquoted commas split a value into a list,
+  e.g. `ext=jpg,png` or `type=image,video`. Quote to keep commas literal. This is
+  what the filter sidebar emits; across fields clauses still AND.
+- **Free text:** bare or `"quoted"` words → matched against FTS5 (filename tokens
+  + extracted body) OR as a filename substring. Multiple terms AND; negatives exclude.
 - Searches **current versions of non-deleted assets**. Empty query = list all.
 - Compiles to `EXISTS (… version_metadata …)` per clause + FTS subqueries.
   Files: `src/search/dsl.js` (parse/compile), `src/search/search.js` (execute).
@@ -194,7 +196,7 @@ Detailed plan: `~/.claude/plans/yes-the-metadata-extraction-synthetic-parasol.md
 ## Monorepo & plugin architecture (as built)
 
 npm **workspaces** (no turborepo). One root `npm install` symlinks the packages.
-**105 tests green** across the workspaces (`npm test`).
+**138 tests green** across the workspaces (`npm test`).
 
 ```
 packages/
@@ -237,6 +239,56 @@ packages/
 - **Config loader:** `server/src/plugins/config.js` `loadPluginRegistry(dataDir)`
   dynamic-imports `<dataDir>/archive.config.js` by file URL, so its plugin imports
   resolve against the instance's own `node_modules`.
+- **Collections (nestable, done):** unlimited-depth tree (`collections.parent_id`)
+  with a **closure table** (`collection_closure`) so "all assets in a collection
+  incl. descendants" is one flat indexed query regardless of depth.
+  `asset_collections` is the many-to-many membership. **Filtering is by NAME**: the
+  `collection` filter key (a `FILTER_KEY`, not an EAV facet) compiles to a
+  closure+name `EXISTS` — so duplicate names union their subtrees, and selecting a
+  name is descendant-inclusive. It rides the same query/URL/search-bar system
+  (`collection=Trips,Docs`, `?collection=…`). CRUD + membership API
+  (`/api/collections`, `/api/assets/:id/collections`); the sidebar
+  `<archive-collections>` tree (multi-select by name → `store.filters.collection`),
+  a `/collections` manager page, and membership checkboxes (by id) on the asset
+  detail page. Delete cascades the subtree (assets untouched). Files:
+  `collections/collections.js`, `server/routes/collections.js`, migration 006.
+  Deferred: collection-based sharing, and bulk "add uploads to a collection".
+- **Filters (faceted, extensible):** `GET /api/facets?keys=ext,type` returns, per
+  metadata key, the distinct text values in the archive with counts (a GROUP BY
+  over the EAV table — works for ANY key with no per-filter backend code). The
+  `<archive-filters>` sidebar renders a section per facet (config `FACETS` in
+  `web/public/app.js` — add a key to add a filter) and broadcasts selected values
+  as `archive:filters`. `<archive-assets>` composes `search text + filters` into
+  one DSL query (filters become `key=v1,v2`), so filtering reuses the whole search
+  + live-reconcile pipeline. Facet counts are whole-archive (not query-scoped) for
+  now. Files: `facets/facets.js`, `server/routes/facets.js`.
+- **Unified search + filter state (one source of truth):** state is
+  `{ text, filters }`. The search bar, the filter sidebar, the URL, and the grid
+  are all *views* of it. A client-side `store` (in `web/public/app.js`) owns it;
+  the search bar (searches **on Enter only**) and sidebar checkboxes are the two
+  editors. Typing a facet command (`ext:jpg`, `ext=jpg,png`) is parsed out into
+  `filters`, so it's equivalent to clicking the sidebar — both normalize to the
+  same canonical query and the same URL. Toggling a filter re-populates the search
+  bar; both stay in sync. `search/compose.js` is the server source of truth
+  (`resolveState` folds facet commands out of `q` too, `parseQueryString`,
+  `composeQuery`, `stateToUrl`, `FACET_KEYS`), mirrored in `app.js`.
+- **Sorting + pagination:** the state also carries `sort` (`date`|`name`),
+  `direction` (`asc`|`desc`), `page`, `perPage` — reserved URL params (not facet
+  keys), normalized/whitelisted in `compose.js`. `searchAssets` takes
+  `sort`/`direction` (whitelisted → SQL column, no injection); `paginatedSearch`
+  slices by page and clamps an out-of-range page to the last. `GET /api/search`
+  returns `{ items, total, page, perPage, pages, sort, direction }`; `GET /`
+  renders the first page sorted, with server-rendered controls + pager. Frontend:
+  `<archive-controls>` (sort/order/per-page selects) and `<archive-pager>`
+  (numbered links + Prev/Next); changing search/filters/sort/perPage resets to
+  page 1, page nav keeps everything else. All flow through the store → grid
+  reconciles in place, no reload.
+- **Shareable filter URLs:** the state serializes to `?q=<text>` + one repeated
+  param per facet key (`?q=trip&ext=jpg&ext=png&type=image`). `GET /` renders the
+  grid **server-side filtered** (correct on first paint, works before JS); the
+  client hydrates bar + checkboxes and rewrites the URL (`history.replaceState`)
+  on every change. `?q=ext:jpg` and `?ext=jpg` resolve identically. Paste a URL →
+  same filtered view.
 - **Live updates (no refresh):** the asset grid is a pure function of
   `query -> items`. The client (`<archive-assets>`) re-runs its current query and
   **reconciles cards by asset id** (updating only those whose signature —
@@ -256,21 +308,31 @@ packages/
 
 ### Source map (within packages/server/src, unless noted)
 
+**Util/domain modules live under `src/lib/`.** Outside `lib`: `src/server` (HTTP),
+`src/web` (frontend), `src/worker` (background extraction — core, not a util), and
+`src/index.js` (package entry). Single-file modules go directly in `lib/` (e.g.
+`lib/assets.js`); multi-file modules keep a folder (e.g. `lib/auth/`).
+
 - `packages/cli/{bin/archive.js, src/cli.js, src/prompt.js}` — CLI.
-- `config.js` — flag/env/default config resolution (+ `parseFlags`).
-- `db/` — `index.js` (single `node:sqlite` access point), `migrate.js`, `migrations/*.sql`.
-- `storage/blobs.js` — content-addressed blob store (SHA-256, sharded, dedup).
-- `auth/` — `passwords.js` (scrypt), `users.js`, `sessions.js`.
-- `assets/assets.js` — asset/version data layer + versioning rules.
-- `server/` — `index.js` (createApp), `router.js`, `respond.js`, `middleware.js`,
-  `upload.js`, `routes/{auth,assets,search,pages,events}.js`.
-- `events/bus.js` — in-process `change` pub/sub shared by routes + worker + SSE.
-- `plugins/` — `registry.js` (`PluginRegistry` + apiVersion check), `config.js` (loader).
-- `metadata/` — `core.js` (shared core-metadata), `store.js` (typed EAV + FTS
-  writes; `indexVersionCore` for upload-time indexing).
-- `storage/` — `blobs.js`, `derived.js` (thumbnails).
+- `index.js` — package entry: re-exports the public API from `lib/*` + `server/`.
+- `lib/config.js` — flag/env/default config resolution (+ `parseFlags`).
+- `lib/db/` — `index.js` (single `node:sqlite` access point), `migrate.js`, `migrations/*.sql`.
+- `lib/storage/` — `blobs.js` (content-addressed, SHA-256), `derived.js` (thumbnails).
+- `lib/auth/` — `passwords.js` (scrypt), `users.js`, `sessions.js`.
+- `lib/assets.js` — asset/version data layer + versioning rules.
+- `lib/collections.js` — collection tree + closure maintenance + membership.
+- `lib/facets.js` — distinct-value + count aggregation per metadata key.
+- `lib/bus.js` — in-process `change` pub/sub shared by routes + worker + SSE.
+- `lib/metadata/` — `core.js` (shared core-metadata), `store.js` (typed EAV + FTS;
+  `indexVersionCore` for upload-time indexing).
+- `lib/search/` — `dsl.js` (parse/compile), `compose.js` (state⇄string⇄URL),
+  `search.js` (`searchAssets`, `paginatedSearch`).
+- `lib/plugins/` — `registry.js` (`PluginRegistry` + apiVersion check), `config.js` (loader).
 - `worker/` — `extract.js` (core + plugin merge, thumbnails), `queue.js`, `index.js`
   (`ExtractionWorker`, `runPending`; emits `change`; requires an explicit registry).
+  Top-level (not a util); imports its deps from `../lib/…`.
+- `server/` — `index.js` (createApp), `router.js`, `respond.js`, `middleware.js`,
+  `upload.js`, `routes/{auth,assets,search,pages,events,facets,collections}.js`.
 - `web/` — `render.js` + `public/{app.js,styles.css}`; `<archive-assets>` does
   keyed reconciliation + SSE, `<archive-search>` emits query events.
 - Tests live in each package's `test/`; `server/test/helpers/` boots an ephemeral

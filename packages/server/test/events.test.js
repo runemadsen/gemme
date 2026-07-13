@@ -2,13 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { startTestApp } from './helpers/server.js';
-import { createUser } from '../src/auth/users.js';
-import { openMemoryDatabase } from '../src/db/index.js';
-import { BlobStore } from '../src/storage/blobs.js';
-import { PluginRegistry } from '../src/plugins/registry.js';
+import { createUser } from '../src/lib/auth/users.js';
+import { openMemoryDatabase } from '../src/lib/db/index.js';
+import { BlobStore } from '../src/lib/storage/blobs.js';
+import { PluginRegistry } from '../src/lib/plugins/registry.js';
 import { runPending } from '../src/worker/index.js';
 import { enqueueExtraction } from '../src/worker/queue.js';
-import { createEventBus } from '../src/events/bus.js';
+import { createEventBus } from '../src/lib/bus.js';
 
 test('/api/events requires auth', async () => {
   const app = await startTestApp();

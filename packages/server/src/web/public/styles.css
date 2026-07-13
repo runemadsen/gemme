@@ -35,9 +35,47 @@ a:hover { text-decoration: underline; }
   position: sticky; top: 0; background: var(--bg); z-index: 10;
 }
 .brand { font-weight: 700; font-size: 18px; color: var(--fg); }
+.nav { display: flex; gap: 14px; margin-right: auto; margin-left: 20px; }
+.nav a { color: var(--muted); font-size: 14px; }
+.nav a:hover { color: var(--fg); text-decoration: none; }
+
+/* Collection tree */
+archive-collections h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+.ctree, .ctree ul { list-style: none; margin: 0; padding: 0; }
+.ctree ul { margin-left: 16px; border-left: 1px solid var(--line); padding-left: 6px; }
+.crow { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 14px; }
+.ctoggle { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 2px; width: 18px; }
+.cspacer { display: inline-block; width: 18px; }
+.cname { flex: 1; display: inline-flex; align-items: center; gap: 6px; overflow: hidden; }
+.cname span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crow .count { color: var(--muted); font-size: 12px; }
+li.collapsed > ul { display: none; }
+.crow.manage { flex-wrap: wrap; gap: 8px; }
+.crow.manage select { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
+.cnew { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.cnew input { flex: 1; min-width: 160px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
+.cnew select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
 .user { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
 
-main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+main { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+/* Sidebar + content layout */
+.layout { display: flex; gap: 24px; align-items: flex-start; }
+.sidebar { width: 220px; flex: none; position: sticky; top: 72px; }
+.content { flex: 1; min-width: 0; }
+@media (max-width: 700px) {
+  .layout { flex-direction: column; }
+  .sidebar { width: 100%; position: static; }
+}
+
+/* Filters */
+archive-filters h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+.facet { margin-bottom: 18px; }
+.facet h3 { font-size: 13px; margin: 0 0 6px; }
+.facet-opt { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 14px; cursor: pointer; }
+.facet-opt .facet-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.facet-opt .count { color: var(--muted); font-size: 12px; }
+.facet-opt input { accent-color: var(--accent); }
 
 button {
   font: inherit; cursor: pointer; border: 1px solid var(--line);
@@ -64,6 +102,25 @@ archive-search { display: block; margin: 16px 0; }
 .upload-list { list-style: none; padding: 0; margin: 10px 0 0; font-size: 13px; color: var(--muted); }
 .upload-list .ok { color: #16a34a; }
 .upload-list .fail { color: var(--danger); }
+
+/* Toolbar (sort / order / per-page) */
+.toolbar { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0 4px; }
+.control { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.control select {
+  font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--card); color: var(--fg);
+}
+
+/* Pager */
+.pager { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; align-items: center; margin: 22px 0; }
+.pager .page {
+  min-width: 32px; padding: 6px 10px; text-align: center; border: 1px solid var(--line);
+  border-radius: 6px; font-size: 14px; color: var(--fg); text-decoration: none;
+}
+.pager a.page:hover { border-color: var(--accent); text-decoration: none; }
+.pager .page.current { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.pager .page.disabled { color: var(--muted); opacity: .5; }
+.pager .page.gap { border: none; }
 
 /* Grid */
 .grid {

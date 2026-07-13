@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startTestApp } from './helpers/server.js';
-import { createUser } from '../src/auth/users.js';
+import { createUser } from '../src/lib/auth/users.js';
 import { enqueueExtraction, runPending } from '../src/worker/index.js';
 import { fakeRegistry } from './helpers/plugins.js';
-import { BlobStore } from '../src/storage/blobs.js';
+import { BlobStore } from '../src/lib/storage/blobs.js';
 
 // Verifies the upload -> onVersionCreated -> enqueue -> extract path end to end
 // through the HTTP layer (guards the startServer/createApp wiring).

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openMemoryDatabase } from '../src/db/index.js';
+import { openMemoryDatabase } from '../src/lib/db/index.js';
 import {
   createAssetWithVersion,
   addVersion,
@@ -8,8 +8,8 @@ import {
   listAssets,
   softDeleteAsset,
   deleteVersion,
-} from '../src/assets/assets.js';
-import { searchAssets } from '../src/search/search.js';
+} from '../src/lib/assets.js';
+import { searchAssets } from '../src/lib/search/search.js';
 
 function seedUser(db) {
   return db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b.com', 'x')

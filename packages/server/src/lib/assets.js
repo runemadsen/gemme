@@ -1,5 +1,5 @@
 import { HttpError } from '../server/respond.js';
-import { indexVersionCore } from '../metadata/store.js';
+import { indexVersionCore } from './metadata/store.js';
 
 /**
  * Data layer for assets and their versions. Enforces the versioning rules:

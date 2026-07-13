@@ -2,10 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sendHtml, redirect, HttpError } from '../respond.js';
-import { searchAssets } from '../../search/search.js';
-import { getAsset } from '../../assets/assets.js';
-import { getVersionMetadata } from '../../metadata/store.js';
-import { renderHome, renderLogin, renderDetail, renderNotFound } from '../../web/render.js';
+import { paginatedSearch } from '../../lib/search/search.js';
+import { resolveState, composeQuery } from '../../lib/search/compose.js';
+import { QueryError } from '../../lib/search/dsl.js';
+import { getAsset } from '../../lib/assets.js';
+import { getVersionMetadata } from '../../lib/metadata/store.js';
+import { renderHome, renderLogin, renderDetail, renderNotFound, renderCollectionsPage } from '../../web/render.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../web/public/', import.meta.url));
 const CONTENT_TYPES = {
@@ -23,8 +25,22 @@ export function registerPageRoutes(router) {
 
   router.get('/', (req, res, ctx) => {
     if (!ctx.user) return redirect(res, '/login');
-    const result = searchAssets(ctx.db, '', { limit: 100 });
-    sendHtml(res, 200, renderHome({ user: ctx.user, result }));
+    // Render the grid filtered to the URL state so a shared link is correct on
+    // first paint (and works before JS). Falls back to all on a malformed query.
+    const state = resolveState(ctx.url.searchParams);
+    let result;
+    try {
+      result = paginatedSearch(ctx.db, { ...state, query: composeQuery(state.text, state.filters) });
+    } catch (err) {
+      if (!(err instanceof QueryError)) throw err;
+      result = paginatedSearch(ctx.db, { query: '' });
+    }
+    sendHtml(res, 200, renderHome({ user: ctx.user, result, state }));
+  });
+
+  router.get('/collections', (req, res, ctx) => {
+    if (!ctx.user) return redirect(res, '/login');
+    sendHtml(res, 200, renderCollectionsPage({ user: ctx.user }));
   });
 
   router.get('/assets/:id', (req, res, ctx) => {

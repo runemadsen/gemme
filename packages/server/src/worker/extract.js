@@ -1,5 +1,5 @@
-import { writeExtraction } from '../metadata/store.js';
-import { coreMetadata } from '../metadata/core.js';
+import { writeExtraction } from '../lib/metadata/store.js';
+import { coreMetadata } from '../lib/metadata/core.js';
 
 /** Default thumbnail spec handed to plugins. Kept consistent across filetypes. */
 export const DEFAULT_THUMBNAIL_TARGET = { maxEdge: 512, format: 'webp' };

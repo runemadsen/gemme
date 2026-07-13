@@ -1,12 +1,14 @@
 // Vanilla Web Component islands + small page glue. No framework, no build step.
 //
-// The asset grid is a pure function of (query -> items). Two things trigger a
-// re-render, both funnelling through <archive-assets>.refresh():
-//   • query changes  — <archive-search> dispatches `archive:query`
-//   • data changes   — an upload (`archive:changed`) or a server-sent `change`
-//                       event on /api/events (extraction finished, delete, …)
-// Rendering uses keyed reconciliation so unchanged cards (and their already-
-// loaded thumbnails) are left untouched.
+// Unified search/filter model: a single `store` holds { text, filters } and is
+// the source of truth. The search bar and the filter sidebar are just views of
+// it, and the URL + grid derive from it. Typing `ext:jpg` and clicking the
+// sidebar both resolve to the same state → the same `?ext=jpg` URL.
+//   • search bar (Enter) → store.setFromString(parsed)
+//   • sidebar checkbox    → store.toggleFilter(...)
+//   • any store change    → rewrite URL, re-render bar + sidebar, refetch grid
+// Data changes (uploads, server-sent `change`) refetch the grid without
+// touching query state. Rendering uses keyed reconciliation.
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -19,12 +21,12 @@ function fmtSize(bytes) {
   return `${i === 0 ? n : n.toFixed(1)} ${units[i]}`;
 }
 
-// Must match cardSig() in web/render.js.
+// ---- cards + keyed reconciliation ----------------------------------------
+
 function cardSig(item) {
   return [item.thumbnail_type || '', item.current_version_id, item.extraction_status, item.byte_size, item.original_filename].join('|');
 }
 
-// Inner markup, shared shape with render.js `cardInner`.
 function cardInner(item) {
   const pending = item.extraction_status === 'pending';
   const thumb = item.thumbnail_type
@@ -52,20 +54,12 @@ function updateCard(el, item) {
   el.innerHTML = cardInner(item);
 }
 
-/**
- * Keyed reconcile: match existing cards by data-id, update only those whose
- * signature changed, insert new ones, remove gone ones, and fix order — reusing
- * DOM nodes so unchanged thumbnails don't reload.
- */
 function reconcile(grid, items) {
   if (!items.length) {
     grid.innerHTML = `<p class="empty">No matches.</p>`;
     return;
   }
-  // Drop any non-card placeholder (empty/error message) currently shown.
-  for (const child of [...grid.children]) {
-    if (!child.dataset || !child.dataset.id) child.remove();
-  }
+  for (const child of [...grid.children]) if (!child.dataset || !child.dataset.id) child.remove();
   const existing = new Map([...grid.children].map((el) => [el.dataset.id, el]));
   const seen = new Set();
   for (const item of items) {
@@ -74,50 +68,274 @@ function reconcile(grid, items) {
     let el = existing.get(id);
     if (!el) el = makeCard(item);
     else if (el.dataset.sig !== cardSig(item)) updateCard(el, item);
-    grid.appendChild(el); // moves into the correct order (no-op if already there)
+    grid.appendChild(el);
   }
   for (const [id, el] of existing) if (!seen.has(id)) el.remove();
 }
 
-async function fetchItems(query) {
-  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-  if (!res.ok) return { items: [], error: (await res.json().catch(() => ({}))).error };
-  return res.json();
+async function fetchResults(state) {
+  const sp = new URLSearchParams();
+  sp.set('q', composeQuery(state.text, state.filters));
+  sp.set('sort', state.sort);
+  sp.set('direction', state.direction);
+  sp.set('page', String(state.page));
+  sp.set('perPage', String(state.perPage));
+  const res = await fetch(`/api/search?${sp.toString()}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: body.error || `HTTP ${res.status}` };
+  return body;
 }
 
-// <archive-assets> — owns the grid, the current query, and live updates.
+// ---- query model (mirrors server search/compose.js) ----------------------
+
+// Facet sections shown in the sidebar. Add a key here to add a filter (the
+// backend facet API is key-driven). FACET_KEYS mirrors compose.js on the server.
+const FACETS = [
+  { key: 'ext', label: 'Extension' },
+  { key: 'type', label: 'Type' },
+];
+const FACET_KEYS = FACETS.map((f) => f.key);
+// All keys recognized as filters in the query string (facets + collection).
+const FILTER_KEYS = [...FACET_KEYS, 'collection'];
+
+// View controls (sort/pagination). Mirror compose.js on the server.
+const SORT_KEYS = ['date', 'name'];
+const SORT_LABELS = { date: 'Upload date', name: 'Filename' };
+const PER_PAGE_OPTIONS = [25, 50, 100, 200];
+const DEFAULTS = { sort: 'date', direction: 'desc', page: 1, perPage: 50 };
+const RESERVED = new Set(['q', 'sort', 'direction', 'page', 'perPage']);
+
+function normalizeControls(c = {}) {
+  const p = Math.floor(Number(c.page));
+  const pp = Math.floor(Number(c.perPage));
+  return {
+    sort: SORT_KEYS.includes(c.sort) ? c.sort : DEFAULTS.sort,
+    direction: c.direction === 'asc' || c.direction === 'desc' ? c.direction : DEFAULTS.direction,
+    page: Number.isFinite(p) && p >= 1 ? p : DEFAULTS.page,
+    perPage: Number.isFinite(pp) && pp >= 1 ? Math.min(pp, 200) : DEFAULTS.perPage,
+  };
+}
+
+function quoteValue(v) {
+  const s = String(v);
+  return s === '' || /[\s,"]/.test(s) ? `"${s.replace(/"/g, '')}"` : s;
+}
+
+// { text, filters } -> canonical query string (also what we execute).
+function composeQuery(text, filters) {
+  const parts = [];
+  const t = (text || '').trim();
+  if (t) parts.push(t);
+  for (const [key, values] of Object.entries(filters || {})) {
+    if (values && values.length) parts.push(`${key}=${values.map(quoteValue).join(',')}`);
+  }
+  return parts.join(' ');
+}
+
+// Typed query string -> { text, filters }, extracting facet commands.
+function parseQueryString(input, facetKeys = FILTER_KEYS) {
+  const keys = new Set(facetKeys);
+  const filters = {};
+  const rest = [];
+  for (const tok of tokenizeQuery(input || '')) {
+    const m = /^([A-Za-z_][\w.]*)[:=](.*)$/.exec(tok);
+    if (m && keys.has(m[1])) {
+      const values = splitList(m[2]);
+      if (values.length) filters[m[1]] = mergeValues(filters[m[1]] || [], values);
+    } else {
+      rest.push(tok);
+    }
+  }
+  return { text: rest.join(' ').trim(), filters };
+}
+
+function splitList(raw) {
+  if (raw.length >= 2 && raw[0] === '"' && raw.endsWith('"')) return [raw.slice(1, -1)];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .map((s) => (s.length >= 2 && s[0] === '"' && s.endsWith('"') ? s.slice(1, -1) : s))
+    .filter((s) => s.length > 0);
+}
+
+function mergeValues(a, b) {
+  const seen = new Set(a);
+  return [...a, ...b.filter((v) => !seen.has(v) && (seen.add(v), true))];
+}
+
+function mergeFilters(a, b) {
+  const out = { ...a };
+  for (const [key, values] of Object.entries(b)) out[key] = mergeValues(out[key] || [], values);
+  return out;
+}
+
+function tokenizeQuery(input) {
+  const tokens = [];
+  let i = 0;
+  const n = input.length;
+  while (i < n) {
+    while (i < n && /\s/.test(input[i])) i++;
+    if (i >= n) break;
+    let tok = '';
+    while (i < n && !/\s/.test(input[i])) {
+      if (input[i] === '"') {
+        tok += '"'; i++;
+        while (i < n && input[i] !== '"') tok += input[i++];
+        if (i < n) tok += input[i++];
+      } else {
+        tok += input[i++];
+      }
+    }
+    tokens.push(tok);
+  }
+  return tokens;
+}
+
+function resolveUrlState() {
+  const sp = new URLSearchParams(location.search);
+  const fromParams = {};
+  for (const key of new Set(sp.keys())) {
+    if (RESERVED.has(key)) continue;
+    const values = sp.getAll(key).filter((v) => v !== '');
+    if (values.length) fromParams[key] = values;
+  }
+  const { text, filters: fromText } = parseQueryString(sp.get('q') || '');
+  const controls = normalizeControls({
+    sort: sp.get('sort'),
+    direction: sp.get('direction'),
+    page: sp.get('page'),
+    perPage: sp.get('perPage'),
+  });
+  return { text, filters: mergeFilters(fromParams, fromText), ...controls };
+}
+
+// Full state -> URLSearchParams (only non-default controls). Mirrors stateToUrl.
+function stateToParams(state) {
+  const sp = new URLSearchParams();
+  const t = (state.text || '').trim();
+  if (t) sp.set('q', t);
+  for (const [key, values] of Object.entries(state.filters || {})) for (const v of values) sp.append(key, v);
+  const c = normalizeControls(state);
+  if (c.sort !== DEFAULTS.sort) sp.set('sort', c.sort);
+  if (c.direction !== DEFAULTS.direction) sp.set('direction', c.direction);
+  if (c.page !== DEFAULTS.page) sp.set('page', String(c.page));
+  if (c.perPage !== DEFAULTS.perPage) sp.set('perPage', String(c.perPage));
+  return sp;
+}
+
+function urlFor(state) {
+  const qs = stateToParams(state).toString();
+  return qs ? `?${qs}` : location.pathname;
+}
+
+function writeUrlState(state) {
+  history.replaceState(null, '', urlFor(state));
+}
+
+// ---- the store: single source of truth for search + filters --------------
+
+const store = {
+  text: '',
+  filters: {},
+  sort: DEFAULTS.sort,
+  direction: DEFAULTS.direction,
+  page: DEFAULTS.page,
+  perPage: DEFAULTS.perPage,
+  listeners: new Set(),
+  init(state) {
+    Object.assign(this, normalizeControls(state), { text: state.text, filters: state.filters });
+  },
+  snapshot() {
+    return {
+      text: this.text,
+      filters: { ...this.filters },
+      sort: this.sort,
+      direction: this.direction,
+      page: this.page,
+      perPage: this.perPage,
+    };
+  },
+  queryString() {
+    return composeQuery(this.text, this.filters);
+  },
+  subscribe(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  },
+  // Query-affecting changes reset to page 1; only setPage keeps the page.
+  setFromString(str) {
+    const s = parseQueryString(str);
+    this.text = s.text;
+    this.filters = s.filters;
+    this.page = 1;
+    this.commit();
+  },
+  toggleFilter(key, value, on) {
+    const set = new Set(this.filters[key] || []);
+    if (on) set.add(value);
+    else set.delete(value);
+    const filters = { ...this.filters };
+    if (set.size) filters[key] = [...set];
+    else delete filters[key];
+    this.filters = filters;
+    this.page = 1;
+    this.commit();
+  },
+  setSort(v) {
+    this.sort = v;
+    this.page = 1;
+    this.commit();
+  },
+  setDirection(v) {
+    this.direction = v;
+    this.page = 1;
+    this.commit();
+  },
+  setPerPage(v) {
+    this.perPage = Number(v);
+    this.page = 1;
+    this.commit();
+  },
+  setPage(n) {
+    this.page = n;
+    this.commit();
+  },
+  // Reflect a server-clamped page without triggering another fetch.
+  adoptPage(n) {
+    this.page = n;
+    writeUrlState(this.snapshot());
+  },
+  commit() {
+    writeUrlState(this.snapshot());
+    for (const fn of this.listeners) fn(this.snapshot());
+  },
+};
+
+// ---- components -----------------------------------------------------------
+
+// <archive-assets> — the grid. Re-renders on query changes (store) and data
+// changes (uploads / server-sent), reconciling by asset id.
 class ArchiveAssets extends HTMLElement {
   connectedCallback() {
     this.grid = this.querySelector('#results') || this.appendChild(Object.assign(document.createElement('div'), { id: 'results', className: 'grid' }));
-    this.query = '';
     this.seq = 0;
     this.debounce = null;
-
-    this.onQuery = (e) => { this.query = e.detail.query || ''; this.refresh(); };
-    this.onChanged = () => this.scheduleRefresh();
-    document.addEventListener('archive:query', this.onQuery);
-    document.addEventListener('archive:changed', this.onChanged);
-    this.connectStream();
+    // The server already rendered the grid for the current URL state, so we
+    // only refetch on subsequent changes.
+    this.unsubscribe = store.subscribe(() => this.refresh());
+    this.onData = () => this.scheduleRefresh();
+    document.addEventListener('archive:changed', this.onData);
+    document.addEventListener('archive:server-change', this.onData);
+    connectServerEvents();
   }
 
   disconnectedCallback() {
-    document.removeEventListener('archive:query', this.onQuery);
-    document.removeEventListener('archive:changed', this.onChanged);
+    this.unsubscribe?.();
+    document.removeEventListener('archive:changed', this.onData);
+    document.removeEventListener('archive:server-change', this.onData);
     clearTimeout(this.debounce);
-    this.source?.close();
   }
 
-  // Live server pushes (extraction done, deletes from other tabs, …).
-  connectStream() {
-    try {
-      this.source = new EventSource('/api/events');
-      this.source.addEventListener('change', () => this.scheduleRefresh());
-    } catch {
-      /* EventSource unavailable — query-driven refresh still works */
-    }
-  }
-
-  // Coalesce bursts (e.g. 20 uploads finishing extraction) into one refresh.
   scheduleRefresh() {
     clearTimeout(this.debounce);
     this.debounce = setTimeout(() => this.refresh(), 250);
@@ -125,29 +343,384 @@ class ArchiveAssets extends HTMLElement {
 
   async refresh() {
     const seq = ++this.seq;
-    const data = await fetchItems(this.query);
-    if (seq !== this.seq) return; // a newer refresh superseded this one
+    const data = await fetchResults(store.snapshot());
+    if (seq !== this.seq) return;
     if (data.error) {
       this.grid.innerHTML = `<p class="error">${esc(data.error)}</p>`;
+      document.dispatchEvent(new CustomEvent('archive:results', { detail: { page: 1, pages: 1, total: 0 } }));
       return;
     }
     reconcile(this.grid, data.items || []);
+    // If the server clamped the page (e.g. filters shrank the result set),
+    // adopt it without triggering another fetch.
+    if (typeof data.page === 'number' && data.page !== store.page) store.adoptPage(data.page);
+    document.dispatchEvent(
+      new CustomEvent('archive:results', { detail: { page: data.page, pages: data.pages, total: data.total } })
+    );
   }
 }
 
-// <archive-search> — debounced query box; broadcasts the query, renders nothing.
+// <archive-search> — shows the canonical query; searches only on Enter.
 class ArchiveSearch extends HTMLElement {
   connectedCallback() {
     const placeholder = this.getAttribute('placeholder') || 'Search…';
     this.innerHTML = `<input type="search" class="search" placeholder="${esc(placeholder)}" autocomplete="off">`;
-    const input = this.querySelector('input');
-    let timer;
-    input.addEventListener('input', () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        document.dispatchEvent(new CustomEvent('archive:query', { detail: { query: input.value } }));
-      }, 180);
+    this.input = this.querySelector('input');
+    this.render();
+    this.unsubscribe = store.subscribe(() => this.render());
+    this.input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        store.setFromString(this.input.value);
+      }
     });
+  }
+
+  disconnectedCallback() {
+    this.unsubscribe?.();
+  }
+
+  render() {
+    // Reflect canonical state, but don't clobber what the user is mid-typing.
+    if (document.activeElement !== this.input) this.input.value = store.queryString();
+  }
+}
+
+// <archive-filters> — checkboxes reflecting store.filters; toggling updates it.
+class ArchiveFilters extends HTMLElement {
+  connectedCallback() {
+    this.facets = {};
+    this.debounce = null;
+    this.innerHTML = `<h2>Filters</h2><p class="empty">Loading…</p>`;
+    this.unsubscribe = store.subscribe(() => this.render());
+    this.onData = () => this.scheduleLoad();
+    document.addEventListener('archive:changed', this.onData);
+    document.addEventListener('archive:server-change', this.onData);
+    this.load();
+  }
+
+  disconnectedCallback() {
+    this.unsubscribe?.();
+    document.removeEventListener('archive:changed', this.onData);
+    document.removeEventListener('archive:server-change', this.onData);
+    clearTimeout(this.debounce);
+  }
+
+  scheduleLoad() {
+    clearTimeout(this.debounce);
+    this.debounce = setTimeout(() => this.load(), 400);
+  }
+
+  async load() {
+    const res = await fetch(`/api/facets?keys=${encodeURIComponent(FACET_KEYS.join(','))}`);
+    if (!res.ok) return;
+    this.facets = (await res.json()).facets || {};
+    this.render();
+  }
+
+  render() {
+    const { filters } = store.snapshot();
+    const sections = FACETS.map((f) => this.section(f, filters)).filter(Boolean);
+    this.innerHTML = `<h2>Filters</h2>${sections.join('') || '<p class="empty">No filters yet.</p>'}`;
+    this.querySelectorAll('input[type=checkbox]').forEach((cb) =>
+      cb.addEventListener('change', () => store.toggleFilter(cb.dataset.key, cb.value, cb.checked))
+    );
+  }
+
+  section(facet, filters) {
+    const values = this.facets[facet.key] || [];
+    if (!values.length) return '';
+    const sel = new Set(filters[facet.key] || []);
+    const opts = values
+      .map((v) => {
+        const val = v.value ?? '';
+        const label = val === '' ? '(none)' : val;
+        return `<label class="facet-opt">
+          <input type="checkbox" data-key="${esc(facet.key)}" value="${esc(val)}" ${sel.has(val) ? 'checked' : ''}>
+          <span class="facet-name">${esc(label)}</span><span class="count">${v.count}</span>
+        </label>`;
+      })
+      .join('');
+    return `<section class="facet"><h3>${esc(facet.label)}</h3>${opts}</section>`;
+  }
+}
+
+// <archive-controls> — sort / direction / per-page selects (server-rendered
+// markup; we attach handlers and keep the values synced to the store).
+class ArchiveControls extends HTMLElement {
+  connectedCallback() {
+    this.selects = {};
+    for (const sel of this.querySelectorAll('select[data-control]')) {
+      this.selects[sel.dataset.control] = sel;
+      sel.addEventListener('change', () => {
+        const v = sel.value;
+        if (sel.dataset.control === 'sort') store.setSort(v);
+        else if (sel.dataset.control === 'direction') store.setDirection(v);
+        else if (sel.dataset.control === 'perPage') store.setPerPage(v);
+      });
+    }
+    this.unsubscribe = store.subscribe((s) => this.sync(s));
+    this.sync(store.snapshot());
+  }
+  disconnectedCallback() {
+    this.unsubscribe?.();
+  }
+  sync(s) {
+    if (this.selects.sort) this.selects.sort.value = s.sort;
+    if (this.selects.direction) this.selects.direction.value = s.direction;
+    if (this.selects.perPage) this.selects.perPage.value = String(s.perPage);
+  }
+}
+
+// <archive-pager> — numbered links + Prev/Next. Initial page/pages come from
+// server-rendered data attributes; updates arrive via `archive:results`.
+class ArchivePager extends HTMLElement {
+  connectedCallback() {
+    this.page = Number(this.dataset.page) || 1;
+    this.pages = Number(this.dataset.pages) || 1;
+    this.onResults = (e) => {
+      this.page = e.detail.page || 1;
+      this.pages = e.detail.pages || 1;
+      this.render();
+    };
+    document.addEventListener('archive:results', this.onResults);
+    this.addEventListener('click', (e) => {
+      const link = e.target.closest('a.page[data-page]');
+      if (!link) return;
+      e.preventDefault();
+      store.setPage(Number(link.dataset.page));
+    });
+    // Server already rendered the initial pager markup; leave it in place.
+  }
+  disconnectedCallback() {
+    document.removeEventListener('archive:results', this.onResults);
+  }
+  render() {
+    this.innerHTML = pagerHtml(this.page, this.pages);
+  }
+}
+
+function pageWindow(page, pages, radius = 2) {
+  const set = new Set([1, pages]);
+  for (let p = page - radius; p <= page + radius; p++) if (p >= 1 && p <= pages) set.add(p);
+  const sorted = [...set].sort((a, b) => a - b);
+  const out = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) out.push('…');
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
+
+function pagerHtml(page, pages) {
+  if (pages <= 1) return '';
+  const s = store.snapshot();
+  const href = (n) => urlFor({ ...s, page: n });
+  const num = (n) =>
+    n === page
+      ? `<span class="page current" aria-current="page">${n}</span>`
+      : `<a class="page" data-page="${n}" href="${href(n)}">${n}</a>`;
+  const prev =
+    page > 1
+      ? `<a class="page prev" data-page="${page - 1}" href="${href(page - 1)}">‹ Prev</a>`
+      : `<span class="page prev disabled">‹ Prev</span>`;
+  const next =
+    page < pages
+      ? `<a class="page next" data-page="${page + 1}" href="${href(page + 1)}">Next ›</a>`
+      : `<span class="page next disabled">Next ›</span>`;
+  const nums = pageWindow(page, pages)
+    .map((p) => (p === '…' ? `<span class="page gap">…</span>` : num(p)))
+    .join('');
+  return `<nav class="pager">${prev}${nums}${next}</nav>`;
+}
+
+// Build a sorted tree (roots[]) from the flat collections list.
+function buildTree(list) {
+  const byId = new Map(list.map((c) => [c.id, { ...c, children: [] }]));
+  const roots = [];
+  for (const c of byId.values()) {
+    if (c.parent_id != null && byId.has(c.parent_id)) byId.get(c.parent_id).children.push(c);
+    else roots.push(c);
+  }
+  const sortRec = (nodes) => {
+    nodes.sort((a, b) => a.name.localeCompare(b.name));
+    nodes.forEach((n) => sortRec(n.children));
+  };
+  sortRec(roots);
+  return roots;
+}
+
+async function fetchCollections() {
+  const res = await fetch('/api/collections');
+  return res.ok ? (await res.json()).collections : [];
+}
+
+// <archive-collections> — sidebar tree; multi-select by NAME drives the filter.
+class ArchiveCollections extends HTMLElement {
+  connectedCallback() {
+    this.innerHTML = `<h2>Collections</h2><div class="tree"><p class="empty">Loading…</p></div>`;
+    this.treeEl = this.querySelector('.tree');
+    this.unsubscribe = store.subscribe(() => this.markSelected());
+    this.onData = () => this.scheduleLoad();
+    document.addEventListener('archive:changed', this.onData);
+    document.addEventListener('archive:server-change', this.onData);
+    this.load();
+  }
+  disconnectedCallback() {
+    this.unsubscribe?.();
+    document.removeEventListener('archive:changed', this.onData);
+    document.removeEventListener('archive:server-change', this.onData);
+    clearTimeout(this.debounce);
+  }
+  scheduleLoad() {
+    clearTimeout(this.debounce);
+    this.debounce = setTimeout(() => this.load(), 400);
+  }
+  async load() {
+    this.roots = buildTree(await fetchCollections());
+    this.render();
+  }
+  render() {
+    if (!this.roots.length) {
+      this.treeEl.innerHTML = `<p class="empty">No collections yet.</p>`;
+      return;
+    }
+    const sel = new Set(store.snapshot().filters.collection || []);
+    this.treeEl.innerHTML = `<ul class="ctree">${this.roots.map((n) => node(n, sel)).join('')}</ul>`;
+    this.treeEl.querySelectorAll('input[type=checkbox]').forEach((cb) =>
+      cb.addEventListener('change', () => store.toggleFilter('collection', cb.value, cb.checked))
+    );
+    this.treeEl.querySelectorAll('.ctoggle').forEach((t) =>
+      t.addEventListener('click', () => t.closest('li').classList.toggle('collapsed'))
+    );
+  }
+  markSelected() {
+    const sel = new Set(store.snapshot().filters.collection || []);
+    this.treeEl?.querySelectorAll('input[type=checkbox]').forEach((cb) => (cb.checked = sel.has(cb.value)));
+  }
+}
+
+// A tree node for the sidebar (checkbox keyed by NAME).
+function node(n, sel) {
+  const hasKids = n.children.length > 0;
+  const toggle = hasKids ? `<button class="ctoggle" type="button" aria-label="collapse">▾</button>` : `<span class="cspacer"></span>`;
+  const kids = hasKids ? `<ul>${n.children.map((c) => node(c, sel)).join('')}</ul>` : '';
+  return `<li>
+    <div class="crow">${toggle}
+      <label class="cname"><input type="checkbox" value="${esc(n.name)}" ${sel.has(n.name) ? 'checked' : ''}> <span>${esc(n.name)}</span></label>
+      <span class="count">${n.assetCount}</span>
+    </div>${kids}</li>`;
+}
+
+// <archive-asset-collections> — membership checkboxes (by id) on the detail page.
+class ArchiveAssetCollections extends HTMLElement {
+  async connectedCallback() {
+    this.assetId = Number(this.dataset.asset);
+    this.innerHTML = `<p class="empty">Loading…</p>`;
+    await this.load();
+  }
+  async load() {
+    const [collections, memRes] = await Promise.all([
+      fetchCollections(),
+      fetch(`/api/assets/${this.assetId}/collections`).then((r) => (r.ok ? r.json() : { collectionIds: [] })),
+    ]);
+    this.member = new Set(memRes.collectionIds);
+    this.roots = buildTree(collections);
+    this.render();
+  }
+  render() {
+    if (!this.roots.length) {
+      this.innerHTML = `<p class="empty">No collections yet. Create some on the <a href="/collections">Collections</a> page.</p>`;
+      return;
+    }
+    const mnode = (n) =>
+      `<li><label class="cname"><input type="checkbox" data-id="${n.id}" ${this.member.has(n.id) ? 'checked' : ''}> <span>${esc(n.name)}</span></label>${n.children.length ? `<ul>${n.children.map(mnode).join('')}</ul>` : ''}</li>`;
+    this.innerHTML = `<ul class="ctree">${this.roots.map(mnode).join('')}</ul>`;
+    this.querySelectorAll('input[type=checkbox]').forEach((cb) => cb.addEventListener('change', () => this.toggle(cb)));
+  }
+  async toggle(cb) {
+    const id = Number(cb.dataset.id);
+    const res = cb.checked
+      ? await fetch(`/api/assets/${this.assetId}/collections`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ collectionId: id }),
+        })
+      : await fetch(`/api/assets/${this.assetId}/collections/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      if (cb.checked) this.member.add(id);
+      else this.member.delete(id);
+      document.dispatchEvent(new CustomEvent('archive:changed')); // refresh counts elsewhere
+    } else {
+      cb.checked = !cb.checked;
+    }
+  }
+}
+
+// <archive-collection-manager> — CRUD tree on the /collections page.
+class ArchiveCollectionManager extends HTMLElement {
+  connectedCallback() {
+    this.innerHTML = `<p class="empty">Loading…</p>`;
+    this.load();
+  }
+  async load() {
+    this.list = await fetchCollections();
+    this.roots = buildTree(this.list);
+    this.render();
+  }
+  render() {
+    const rootOpts = `<option value="">(root)</option>` + this.list.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    this.innerHTML = `
+      <form class="cnew">
+        <input name="cname" placeholder="New collection name" required>
+        <select name="cparent">${rootOpts}</select>
+        <button type="submit">Create</button>
+      </form>
+      <ul class="ctree manage">${this.roots.map((n) => this.node(n)).join('')}</ul>`;
+    this.querySelector('.cnew').addEventListener('submit', (e) => this.create(e));
+    this.querySelectorAll('button[data-act]').forEach((b) => b.addEventListener('click', () => this.act(b)));
+    this.querySelectorAll('select[data-move]').forEach((s) => s.addEventListener('change', () => this.move(s)));
+  }
+  node(n) {
+    const moveOpts =
+      `<option value="">(root)</option>` +
+      this.list.filter((c) => c.id !== n.id).map((c) => `<option value="${c.id}" ${n.parent_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+    const kids = n.children.length ? `<ul>${n.children.map((c) => this.node(c)).join('')}</ul>` : '';
+    return `<li><div class="crow manage">
+      <span class="cname">${esc(n.name)}</span><span class="count">${n.assetCount}</span>
+      <select data-move="${n.id}" title="Move to parent">${moveOpts}</select>
+      <button type="button" data-act="rename" data-id="${n.id}">Rename</button>
+      <button type="button" data-act="delete" data-id="${n.id}">Delete</button>
+    </div>${kids}</li>`;
+  }
+  async create(e) {
+    e.preventDefault();
+    const name = e.target.cname.value.trim();
+    if (!name) return;
+    const parentId = e.target.cparent.value ? Number(e.target.cparent.value) : null;
+    await fetch('/api/collections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, parentId }) });
+    await this.load();
+  }
+  async act(b) {
+    const id = Number(b.dataset.id);
+    if (b.dataset.act === 'rename') {
+      const name = prompt('New name:');
+      if (name && name.trim())
+        await fetch(`/api/collections/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
+    } else if (b.dataset.act === 'delete') {
+      if (!confirm('Delete this collection and all its sub-collections? Assets are not deleted.')) return;
+      await fetch(`/api/collections/${id}`, { method: 'DELETE' });
+    }
+    await this.load();
+  }
+  async move(s) {
+    const id = Number(s.dataset.move);
+    const parentId = s.value ? Number(s.value) : null;
+    const res = await fetch(`/api/collections/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parentId }) });
+    if (!res.ok) alert((await res.json().catch(() => ({}))).error || 'Move failed');
+    await this.load();
   }
 }
 
@@ -226,7 +799,30 @@ function safeError(text) {
   }
 }
 
-// --- page glue -------------------------------------------------------------
+// One shared SSE connection per page; re-broadcast as a document event.
+let serverEventsStarted = false;
+function connectServerEvents() {
+  if (serverEventsStarted) return;
+  serverEventsStarted = true;
+  try {
+    const source = new EventSource('/api/events');
+    source.addEventListener('change', (e) => {
+      document.dispatchEvent(new CustomEvent('archive:server-change', { detail: safeJson(e.data) }));
+    });
+  } catch {
+    serverEventsStarted = false;
+  }
+}
+
+function safeJson(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return {};
+  }
+}
+
+// ---- page glue ------------------------------------------------------------
 
 function wireLogin() {
   const form = document.getElementById('login-form');
@@ -255,8 +851,17 @@ function wireLogout() {
   });
 }
 
+// Initialize the store from the URL before components upgrade and read it.
+store.init(resolveUrlState());
+
 customElements.define('archive-assets', ArchiveAssets);
 customElements.define('archive-search', ArchiveSearch);
+customElements.define('archive-filters', ArchiveFilters);
+customElements.define('archive-collections', ArchiveCollections);
+customElements.define('archive-asset-collections', ArchiveAssetCollections);
+customElements.define('archive-collection-manager', ArchiveCollectionManager);
+customElements.define('archive-controls', ArchiveControls);
+customElements.define('archive-pager', ArchivePager);
 customElements.define('archive-uploader', ArchiveUploader);
 wireLogin();
 wireLogout();

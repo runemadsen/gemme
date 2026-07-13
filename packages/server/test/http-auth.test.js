@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startTestApp } from './helpers/server.js';
-import { createUser } from '../src/auth/users.js';
+import { createUser } from '../src/lib/auth/users.js';
 
 test('health endpoint responds ok', async () => {
   const app = await startTestApp();

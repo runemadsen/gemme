@@ -1,4 +1,4 @@
-import { PluginRegistry } from '../../src/plugins/registry.js';
+import { PluginRegistry } from '../../src/lib/plugins/registry.js';
 
 // Minimal PNG dimension read (tests use PNG buffers only).
 function pngSize(buf) {

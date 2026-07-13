@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DerivedStore, extForType } from '../src/storage/derived.js';
+import { DerivedStore, extForType } from '../src/lib/storage/derived.js';
 
 async function tmpStore() {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-derived-'));

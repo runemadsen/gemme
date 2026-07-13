@@ -1,9 +1,9 @@
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { openDatabase } from '../../src/db/index.js';
+import { openDatabase } from '../../src/lib/db/index.js';
 import { createApp } from '../../src/server/index.js';
-import { createEventBus } from '../../src/events/bus.js';
+import { createEventBus } from '../../src/lib/bus.js';
 
 /**
  * Boot an ephemeral app on a random port backed by a temp data directory.

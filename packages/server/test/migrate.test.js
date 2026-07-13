@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openMemoryDatabase } from '../src/db/index.js';
-import { migrate } from '../src/db/migrate.js';
+import { openMemoryDatabase } from '../src/lib/db/index.js';
+import { migrate } from '../src/lib/db/migrate.js';
 
 function tableNames(db) {
   return db

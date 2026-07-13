@@ -1,11 +1,11 @@
 import { sendJson, readJson, HttpError } from '../respond.js';
-import { authenticateUser } from '../../auth/users.js';
+import { authenticateUser } from '../../lib/auth/users.js';
 import {
   createSession,
   deleteSession,
   serializeSessionCookie,
   clearSessionCookie,
-} from '../../auth/sessions.js';
+} from '../../lib/auth/sessions.js';
 import { requireAuth } from '../middleware.js';
 
 export function registerAuthRoutes(router) {

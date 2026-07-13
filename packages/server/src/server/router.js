@@ -21,6 +21,9 @@ export class Router {
   put(p, h) {
     return this.add('PUT', p, h);
   }
+  patch(p, h) {
+    return this.add('PATCH', p, h);
+  }
   delete(p, h) {
     return this.add('DELETE', p, h);
   }

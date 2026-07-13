@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openMemoryDatabase } from '../src/db/index.js';
-import { hashPassword, verifyPassword } from '../src/auth/passwords.js';
-import { createUser, authenticateUser, getUserByEmail, countUsers } from '../src/auth/users.js';
+import { openMemoryDatabase } from '../src/lib/db/index.js';
+import { hashPassword, verifyPassword } from '../src/lib/auth/passwords.js';
+import { createUser, authenticateUser, getUserByEmail, countUsers } from '../src/lib/auth/users.js';
 import {
   createSession,
   getSessionUser,
   deleteSession,
   parseCookies,
   serializeSessionCookie,
-} from '../src/auth/sessions.js';
+} from '../src/lib/auth/sessions.js';
 
 test('password hashing verifies correct and rejects wrong password', async () => {
   const hash = await hashPassword('correct horse');

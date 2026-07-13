@@ -1,15 +1,17 @@
 import http from 'node:http';
 import { Router } from './router.js';
 import { sendJson, sendText, HttpError } from './respond.js';
-import { parseCookies, getSessionUser, SESSION_COOKIE } from '../auth/sessions.js';
+import { parseCookies, getSessionUser, SESSION_COOKIE } from '../lib/auth/sessions.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerAssetRoutes } from './routes/assets.js';
 import { registerSearchRoutes } from './routes/search.js';
 import { registerPageRoutes } from './routes/pages.js';
 import { registerEventRoutes } from './routes/events.js';
-import { BlobStore } from '../storage/blobs.js';
-import { DerivedStore } from '../storage/derived.js';
-import { createEventBus } from '../events/bus.js';
+import { registerFacetRoutes } from './routes/facets.js';
+import { registerCollectionRoutes } from './routes/collections.js';
+import { BlobStore } from '../lib/storage/blobs.js';
+import { DerivedStore } from '../lib/storage/derived.js';
+import { createEventBus } from '../lib/bus.js';
 
 /**
  * Build the router with all API routes registered. Exposed separately so tests
@@ -23,6 +25,8 @@ export function buildRouter() {
   registerSearchRoutes(router);
   registerPageRoutes(router);
   registerEventRoutes(router);
+  registerFacetRoutes(router);
+  registerCollectionRoutes(router);
   return router;
 }
 

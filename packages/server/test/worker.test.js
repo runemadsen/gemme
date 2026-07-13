@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { openMemoryDatabase } from '../src/db/index.js';
-import { BlobStore } from '../src/storage/blobs.js';
-import { PluginRegistry } from '../src/plugins/registry.js';
+import { openMemoryDatabase } from '../src/lib/db/index.js';
+import { BlobStore } from '../src/lib/storage/blobs.js';
+import { PluginRegistry } from '../src/lib/plugins/registry.js';
 import { runExtraction, runPending } from '../src/worker/index.js';
 import { enqueueExtraction, pendingJobCount } from '../src/worker/queue.js';
-import { getVersionMetadata } from '../src/metadata/store.js';
+import { getVersionMetadata } from '../src/lib/metadata/store.js';
 import { fakeRegistry } from './helpers/plugins.js';
 
 async function setup() {

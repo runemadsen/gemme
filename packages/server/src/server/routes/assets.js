@@ -8,7 +8,7 @@ import {
   listAssets,
   softDeleteAsset,
   deleteVersion,
-} from '../../assets/assets.js';
+} from '../../lib/assets.js';
 
 function intParam(value, what) {
   const n = Number(value);

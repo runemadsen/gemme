@@ -60,7 +60,9 @@ export function parseQuery(input) {
     const m = FIELD_RE.exec(raw);
     if (m) {
       const [, key, op, rawValue] = m;
-      clauses.push({ key, op, value: parseValue(stripQuotes(rawValue)), negate });
+      // A comma-separated (unquoted) value is a list: OR within the field, e.g.
+      // `ext=jpg,png` or `type=image,video`. Quote a value to keep commas literal.
+      clauses.push({ key, op, values: splitValues(rawValue), negate });
     } else {
       const term = stripQuotes(raw);
       if (term) text.push({ term, negate });
@@ -123,30 +125,61 @@ function compileTextTerm({ term, negate }) {
   return { sql: negate ? `NOT ${combined}` : combined, params };
 }
 
-function compileClause({ key, op, value, negate }) {
-  const numeric = value.kind === 'number' || value.kind === 'date';
-  let cond;
-  const params = [key];
-
-  if (op === '>' || op === '<' || op === '>=' || op === '<=') {
-    if (!numeric) throw new QueryError(`Operator '${op}' needs a numeric or date value (got '${value.text}')`);
-    cond = `m.value_num ${op} ?`;
-    params.push(value.num);
-  } else if (op === ':' && !numeric) {
-    cond = "m.value_text LIKE ? ESCAPE '\\'";
-    params.push(`%${escapeLike(value.text)}%`);
-  } else if (numeric) {
-    cond = 'm.value_num = ?';
-    params.push(value.num);
-  } else {
-    cond = 'm.value_text = ?';
-    params.push(value.text);
+function compileClause({ key, op, values, negate }) {
+  // `collection` is not EAV metadata — it matches assets in any collection with
+  // one of the given NAMES, or in any descendant of such a collection (via the
+  // closure table). Duplicate names naturally union.
+  if (key === 'collection') {
+    const names = values.map((v) => v.text);
+    const placeholders = names.map(() => '?').join(', ');
+    const exists = `EXISTS (SELECT 1 FROM asset_collections ac
+        JOIN collection_closure cc ON cc.descendant = ac.collection_id
+        JOIN collections anc ON anc.id = cc.ancestor
+       WHERE ac.asset_id = a.id AND anc.name IN (${placeholders}))`;
+    return { sql: negate ? `NOT ${exists}` : exists, params: names };
   }
+
+  const params = [key];
+  const frags = [];
+  for (const value of values) {
+    const { frag, params: p } = valueCondition(op, value);
+    frags.push(frag);
+    params.push(...p);
+  }
+  // OR the per-value conditions: the field matches if ANY selected value matches.
+  const cond = frags.length > 1 ? `(${frags.join(' OR ')})` : frags[0];
 
   const exists = `EXISTS (SELECT 1 FROM version_metadata m WHERE m.version_id = v.id AND m.key = ? AND ${cond})`;
   // `!=` negates the match; a leading `-` negates the whole term; they compose.
   const finalNegate = (op === '!=') !== negate;
   return { sql: finalNegate ? `NOT ${exists}` : exists, params };
+}
+
+/** SQL fragment + params for matching one value under an operator. */
+function valueCondition(op, value) {
+  const numeric = value.kind === 'number' || value.kind === 'date';
+  if (op === '>' || op === '<' || op === '>=' || op === '<=') {
+    if (!numeric) throw new QueryError(`Operator '${op}' needs a numeric or date value (got '${value.text}')`);
+    return { frag: `m.value_num ${op} ?`, params: [value.num] };
+  }
+  if (op === ':' && !numeric) {
+    return { frag: "m.value_text LIKE ? ESCAPE '\\'", params: [`%${escapeLike(value.text)}%`] };
+  }
+  if (numeric) return { frag: 'm.value_num = ?', params: [value.num] };
+  return { frag: 'm.value_text = ?', params: [value.text] };
+}
+
+/**
+ * Split a raw field value into a list of typed values. An unquoted value with
+ * commas becomes multiple values (OR); a fully-quoted value stays a single
+ * literal (commas included).
+ */
+function splitValues(raw) {
+  if (raw.length >= 2 && raw[0] === '"' && raw.endsWith('"')) return [parseValue(stripQuotes(raw))];
+  return raw.split(',').map((part) => {
+    const p = part.trim();
+    return parseValue(p.length >= 2 && p[0] === '"' && p.endsWith('"') ? stripQuotes(p) : p);
+  });
 }
 
 function ftsPhrase(term) {

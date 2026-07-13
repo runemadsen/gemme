@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startTestApp } from './helpers/server.js';
-import { createUser } from '../src/auth/users.js';
+import { createUser } from '../src/lib/auth/users.js';
 
 async function login(app) {
   await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });

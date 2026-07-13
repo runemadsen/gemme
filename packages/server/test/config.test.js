@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveConfig, parseFlags, DEFAULT_PORT } from '../src/config.js';
+import { resolveConfig, parseFlags, DEFAULT_PORT } from '../src/lib/config.js';
 
 test('defaults to ~/.archive and default port with no flags or env', () => {
   const cfg = resolveConfig({ argv: [], env: {} });

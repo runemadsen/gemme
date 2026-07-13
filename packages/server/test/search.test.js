@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { openMemoryDatabase } from '../src/db/index.js';
-import { BlobStore } from '../src/storage/blobs.js';
+import { openMemoryDatabase } from '../src/lib/db/index.js';
+import { BlobStore } from '../src/lib/storage/blobs.js';
 import { fakeRegistry } from './helpers/plugins.js';
 import { runExtraction } from '../src/worker/index.js';
-import { searchAssets } from '../src/search/search.js';
+import { searchAssets, paginatedSearch } from '../src/lib/search/search.js';
+import { createAssetWithVersion } from '../src/lib/assets.js';
 
 function pngBuf(w, h) {
   const b = Buffer.alloc(24);
@@ -105,6 +106,46 @@ test('free-text matches filename substrings, case-insensitively (e.g. DSC)', asy
   } finally {
     await s.cleanup();
   }
+});
+
+test('searchAssets sorts by name and date, asc and desc', () => {
+  const db = openMemoryDatabase();
+  const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
+  // Insert in a deliberately non-alphabetical, non-chronological-friendly order.
+  const mk = (name) => createAssetWithVersion(db, { filename: name, mimeType: 'text/plain', hash: name, size: 1, userId });
+  mk('banana.txt');
+  mk('apple.txt');
+  mk('cherry.txt');
+
+  const names = (opts) => searchAssets(db, '', opts).items.map((i) => i.original_filename);
+  assert.deepEqual(names({ sort: 'name', direction: 'asc' }), ['apple.txt', 'banana.txt', 'cherry.txt']);
+  assert.deepEqual(names({ sort: 'name', direction: 'desc' }), ['cherry.txt', 'banana.txt', 'apple.txt']);
+  // date desc = newest first (insertion order reversed); asc = oldest first
+  assert.deepEqual(names({ sort: 'date', direction: 'asc' }), ['banana.txt', 'apple.txt', 'cherry.txt']);
+  assert.deepEqual(names({ sort: 'date', direction: 'desc' }), ['cherry.txt', 'apple.txt', 'banana.txt']);
+  db.close();
+});
+
+test('paginatedSearch returns page slices + meta and clamps overshoot', () => {
+  const db = openMemoryDatabase();
+  const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
+  for (let i = 1; i <= 5; i++)
+    createAssetWithVersion(db, { filename: `f${i}.txt`, mimeType: 'text/plain', hash: `h${i}`, size: 1, userId });
+
+  const p1 = paginatedSearch(db, { sort: 'name', direction: 'asc', page: 1, perPage: 2 });
+  assert.deepEqual(p1.items.map((i) => i.original_filename), ['f1.txt', 'f2.txt']);
+  assert.equal(p1.total, 5);
+  assert.equal(p1.pages, 3);
+  assert.equal(p1.page, 1);
+
+  const p3 = paginatedSearch(db, { sort: 'name', direction: 'asc', page: 3, perPage: 2 });
+  assert.deepEqual(p3.items.map((i) => i.original_filename), ['f5.txt']);
+
+  // Page beyond range clamps to the last page.
+  const over = paginatedSearch(db, { sort: 'name', direction: 'asc', page: 99, perPage: 2 });
+  assert.equal(over.page, 3);
+  assert.deepEqual(over.items.map((i) => i.original_filename), ['f5.txt']);
+  db.close();
 });
 
 test('pagination reports total independent of limit', async () => {

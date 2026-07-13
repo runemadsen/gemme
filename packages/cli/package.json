@@ -1,0 +1,23 @@
+{
+  "name": "@archive/cli",
+  "version": "0.0.0",
+  "description": "Archive command-line interface",
+  "type": "module",
+  "bin": {
+    "archive": "./bin/archive.js"
+  },
+  "dependencies": {
+    "@archive/server": "*"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "MIT"
+}

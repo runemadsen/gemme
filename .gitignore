@@ -1,0 +1,15 @@
+node_modules/
+*.log
+
+# Local dev data directory (SQLite db + blobs)
+.archive/
+data/
+dev-instance/
+
+# npm workspace lockfile is kept; per-instance installs are not
+packages/*/node_modules/
+*.db
+*.db-shm
+*.db-wal
+
+.DS_Store

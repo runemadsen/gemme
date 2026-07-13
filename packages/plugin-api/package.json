@@ -1,0 +1,14 @@
+{
+  "name": "@archive/plugin-api",
+  "version": "0.0.0",
+  "description": "Plugin contract for Archive metadata-extraction plugins",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "license": "MIT"
+}

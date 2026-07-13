@@ -1,0 +1,20 @@
+{
+  "name": "@archive/plugin-text",
+  "version": "0.0.0",
+  "description": "Archive plugin: full-text + counts from text files (zero dependencies)",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dependencies": {
+    "@archive/plugin-api": "*"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "index.js"
+  ],
+  "license": "MIT"
+}

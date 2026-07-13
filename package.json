@@ -1,0 +1,20 @@
+{
+  "name": "archive-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Self-hosted, search-first archive for files of any type (monorepo)",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "test": "npm test --workspaces --if-present",
+    "archive": "node --no-warnings packages/cli/bin/archive.js",
+    "dev:init": "node --no-warnings packages/cli/bin/archive.js init --data-dir ./dev-instance --no-install",
+    "dev:user": "node --no-warnings packages/cli/bin/archive.js create-user --email dev@example.com --password dev --data-dir ./dev-instance",
+    "dev": "node --no-warnings packages/cli/bin/archive.js start --data-dir ./dev-instance"
+  },
+  "license": "MIT"
+}

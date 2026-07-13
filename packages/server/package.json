@@ -1,0 +1,22 @@
+{
+  "name": "@archive/server",
+  "version": "0.0.0",
+  "description": "Archive core: storage, versioning, search, extraction worker, HTTP API",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "dependencies": {
+    "@archive/plugin-api": "*"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "MIT"
+}

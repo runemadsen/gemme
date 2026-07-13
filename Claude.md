@@ -1,0 +1,334 @@
+# Archive application
+
+This is a project to build a web-based application for people or organizations
+who need to create an annotated archive of files (including images and text)
+which can also be used as a a central file server for e.g. serving files for a
+website.
+
+This is a response to me always needing to copy/paste images across different
+folders and repositories whenever I want to use them, and not having a central
+place to store all of my work.
+
+## Key princples
+
+Here's a list of the key principles
+
+- The archive should allow users to upload files of any type.
+- Files are not stored locally in folders, but in a flat list, and you find your
+  files in the interface by searching based on name, upload date, metadata, etc.
+- All the information that the system needs is a file. So, users should be able
+  to simply dump a bunch of files in and that's it. Later, they can add more
+  metadata and organize in collections.
+- Speed matters. Fast snappy interface with amazing search
+
+Every file is private by default, but you can share them publically either from
+a single asset or from a collection of assets.
+
+The UI for adding (in bulk), tagging, and querying these assets should be simple
+and powerful.
+
+## Decisions log
+
+Decisions made while working through the concept. Keep this updated as we go.
+
+### Assets & versioning (decided)
+
+- **Asset vs. version.** An asset is a stable ID pointing at an ordered list of
+  versions. Uploading again never overwrites bytes — it appends a new version.
+- **Current = newest.** The current version is always the most recent upload. No
+  rollback / pinning for now.
+- **Retention.** Old versions are kept by default and only removed when
+  explicitly deleted. Most assets stay single-version (e.g. photos); some
+  accumulate many (e.g. drafts).
+- **New versions are explicit.** Dragging in files always creates *new assets*.
+  Adding a version is a deliberate "upload new version of this" action. Many
+  assets with the same filename may coexist — filename is a label, not identity.
+- **Content-addressed storage.** Version bytes are stored under their content
+  hash, so identical re-uploads dedup for free.
+
+### Metadata (decided)
+
+- **Extracted metadata lives on the version** — it is intrinsic to the bytes
+  (EXIF, dimensions, PDF page count, extracted text). The asset surfaces the
+  current version's extracted metadata.
+- **User metadata lives on the asset** — it survives across versions and is
+  never clobbered by a re-upload.
+- **Extraction is plugin-based per filetype** and must be expandable. Core ships
+  plugins (e.g. image/EXIF, PDF), and users can add more file plugins later.
+- **Provenance.** Each asset/version records which user performed the action.
+
+### Users (decided)
+
+- **Multiple users from day one.** No fine-grained permissions yet: every user
+  can access everything. Assets track the acting user for provenance.
+
+### Sharing (decided)
+
+- Files are **private by default**. Public share links point at the **current
+  version only** — uploading a new version updates what every shared URL serves.
+
+### Version history surfacing (decided)
+
+- For now version history is **internal** (safety/audit), not independently
+  browsable or downloadable in the UI. Door left open to expose it later.
+
+### Tech stack (decided)
+
+- **Runtime:** Node.js + built-in `node:sqlite` (zero native deps). Pin a minimum
+  Node version. All DB access stays behind one module so we can swap to
+  `better-sqlite3` if `node:sqlite` (experimental) bites us.
+- **HTTP:** pure `node:http`, no web framework, with a small hand-written router.
+  Multipart upload parsing is isolated behind one module (may use a focused dep
+  like `busboy`, easily swapped).
+- **Frontend:** pure vanilla Web Components, no framework, no build step. Server
+  renders complete HTML; ~2 interactive "islands" (`<archive-uploader>`,
+  `<archive-search>`) are native custom elements loaded as ES modules. The page is
+  useful with zero JS — same "nothing is broken with just a file" philosophy.
+- **API-first:** a JSON HTTP API holds all functionality; the frontend is a client
+  of it. Everything runs in one process on one box.
+- **Search:** the **filter DSL is the headline feature**. Storage/query layer is
+  designed around typed filtering (`width=1080`, `duration>10s`) plus FTS5 full
+  text. Extracted metadata stored as typed EAV (`version_metadata`) with a `source`
+  column per plugin; keys are multi-valued.
+- **Distribution:** `npx @archive/cli init` scaffolds a project (no global
+  install). Each instance is a small npm project whose `package.json` lists
+  `@archive/cli` + plugins as deps and has `start`/`create-user` scripts; you run
+  it with `npm run start`. DB migrations run automatically on startup.
+
+### Plugin interface (decided)
+
+- A plugin exposes `id`, `matches(mimeType, filename)`, and
+  `async extract(blobPath) -> { metadata: [{key, value, type}], fulltext?, thumbnail? }`.
+- **Multiple plugins run per file** and their metadata is **merged** (each row
+  tagged with the plugin `id`). E.g. an EXIF plugin and an object-recognition
+  plugin both process one image. Per-plugin failure isolation: one crashing plugin
+  never blocks ingestion or the others.
+- Core ships an image plugin (EXIF/dimensions) and a PDF plugin (page count/text).
+  External libs (image decode, PDF parse, thumbnailing, AI inference) stay behind
+  the plugin boundary. Thumbnails are a derived artifact produced by a plugin.
+
+### Deferred (not in v1)
+
+- **Share links** — want to think through the best approach first.
+- **Collections** (flat or nested) — later step.
+- **Tags and custom fields** — later step.
+- **rsync sync** of a local folder — later step.
+- Markdown editor, output editors, mobile app — future.
+
+## Architecture (v1)
+
+Full design lives in the plan file referenced below; summary:
+
+- **Storage:** single `--data-dir` holds `archive.db`, content-addressed `blobs/`
+  (sharded by hash prefix, dedup by SHA-256), and `derived/` thumbnails.
+- **Data model:** `users`, `assets` (→ current_version_id, soft delete),
+  `versions` (content_hash, mime_type, extraction_status, thumbnail_type, and
+  **version_no** — a per-asset 1,2,3… number for display, distinct from the
+  global `id`), `version_metadata` (typed EAV + source), `metadata_fts` (FTS5),
+  `jobs` (durable queue), `migrations`.
+- **Background worker:** on upload the version's **core metadata (filename, ext,
+  type, mime, size, created) + a filename FTS row are indexed synchronously**
+  (`indexVersionCore`, inside the create transaction) so it's *searchable
+  immediately* — before extraction. An in-process job runner then polls `jobs`
+  and fills in plugin metadata (dimensions, EXIF, body text, thumbnail) later,
+  running all matching plugins and merging output. Core is computed once in
+  `metadata/core.js`, shared by upload-time indexing and extraction.
+- **Search DSL:** parser → AST (free text vs `field op value`) → SQL compiler
+  (FTS5 MATCH for text, typed EAV joins for filters).
+
+### Upload wire format (decided during build)
+
+Rather than pull in a multipart parser, uploads are **one file per request as a
+raw body**: `POST /api/assets` (new asset) or `POST /api/assets/:id/versions`
+(new version) with the bytes as the request body, `X-Filename` (URL-encoded) and
+`Content-Type` headers carrying the rest. Streams straight into the blob store.
+Bulk upload = many parallel requests. Isolated in `src/server/upload.js` so it can
+be swapped for multipart later. (We own both client and server, so no HTML-form
+multipart is needed for v1.)
+
+## Build order (v1 milestones, each TDD)
+
+Tests use Node's built-in `node:test` + `assert` (zero deps); HTTP tested via
+`fetch` against an ephemeral server on a temp data-dir. Run with `npm test`.
+
+1. [DONE] Skeleton + storage core (CLI, config, DB module, migration runner, blob store).
+2. [DONE] Users + auth (create-user, login/session, HTTP router + middleware).
+3. [DONE] Assets & versioning API (upload, add version, list, get, delete, download, provenance).
+4. [DONE] Background worker + plugin system (multi-plugin merge, source tags, per-plugin
+   failure isolation, re-runnable). Zero-dep core plugins: `text` (full text + counts)
+   and `image` (dimensions via header parsing). EXIF/PDF/thumbnails/AI are future opt-in
+   plugins that bring their own deps.
+5. [DONE] Search / filter DSL (EAV + FTS5, parser, SQL compiler, `GET /api/search`).
+6. [DONE] Frontend — server-rendered pages (login, asset grid, asset detail) served
+   from `node:http`, plus two vanilla Web Component islands (`<archive-uploader>`
+   drag-drop upload with progress, `<archive-search>` debounced DSL search) in
+   `src/web/public/app.js`. No framework, no build step. Static files served from
+   `/static/:file`. Files: `src/web/render.js`, `src/web/public/{app.js,styles.css}`,
+   `src/server/routes/pages.js`.
+
+**v1 complete.** All six milestones built TDD, then restructured into an npm-workspaces
+monorepo with a config-driven plugin system (see below). 105 tests green (`npm test`). Verified
+end-to-end against a live server: create-user → login → drag/upload → background
+extraction → DSL search → versioning → download → detail pages.
+
+Not covered by automated tests (needs a browser): in-page JS island behavior
+(drag-drop, live-typing search). The module parses, its endpoints are tested, and
+server-rendered pages are verified via HTTP.
+
+### Search DSL grammar (as built — v1)
+
+Query = whitespace-separated terms; any term negatable with leading `-`.
+- **Field clause:** `key<op>value`, ops `:` `=` `!=` `>` `<` `>=` `<=`.
+  `:` = contains (text) / equals (number/date); `=` = exact; `>`/`<`/… require a
+  numeric or date value (else 400). Values may carry units: time `ms/s/min/h/d`,
+  bytes `b/kb/mb/gb/tb` (normalized to a base number).
+- **Free text:** bare or `"quoted"` words → FTS5 MATCH (filename + extracted text).
+  Multiple positives AND together; negatives exclude.
+- Searches **current versions of non-deleted assets**. Empty query = list all.
+- Compiles to `EXISTS (… version_metadata …)` per clause + FTS subqueries.
+  Files: `src/search/dsl.js` (parse/compile), `src/search/search.js` (execute).
+  Examples: `mountains type:image width>1920 -type:pdf created>2024-01-01`.
+
+Detailed plan: `~/.claude/plans/yes-the-metadata-extraction-synthetic-parasol.md`.
+
+## Monorepo & plugin architecture (as built)
+
+npm **workspaces** (no turborepo). One root `npm install` symlinks the packages.
+**105 tests green** across the workspaces (`npm test`).
+
+```
+packages/
+  plugin-api/    @archive/plugin-api    tiny contract: definePlugin(), apiVersion
+  server/        @archive/server        core: db, storage, auth, assets, search,
+                                        worker, HTTP API, plugin loader
+  cli/           @archive/cli           the `archive` bin (init/start/migrate/
+                                        create-user/plugins add) → depends on server
+  plugin-text/   @archive/plugin-text   full text + counts (zero-dep)
+  plugin-image/  @archive/plugin-image  dimensions (header parse) + EXIF (exifr)
+                                        + WebP thumbnails (sharp)
+```
+
+- **Plugins are packages, not bundled in core.** Each plugin default-exports a
+  *factory* taking options, and depends only on `@archive/plugin-api`. `server`
+  ships zero plugin deps. `server` checks each plugin's `apiVersion` on load.
+- **Each instance is a small npm project** (the npx flow: `mkdir my-archive &&
+  cd my-archive && npx @archive/cli init`). `init` defaults the data dir to the
+  current directory and scaffolds `package.json` (deps: `@archive/cli` + default
+  plugins text/image; scripts: `start`, `create-user` → both `--data-dir .`),
+  `archive.config.js`, then runs `npm install` — so the `archive` bin lands in
+  local `node_modules/.bin`. You run it with `npm run start`. `archive plugins add
+  <pkg>` installs + edits the config. `archive start` loads the config → builds
+  the `PluginRegistry` → the worker uses it. Missing config → clear "run `archive
+  init`" error. (Interactive `create-user` prompts need a real TTY — through
+  `npm run` you pass `--email`/`--password`; the both-TTY guard in
+  `cli/src/prompt.js` prevents silently buffered prompts.)
+- **Thumbnails.** Every asset *can* have a thumbnail; none is fine (UI shows a
+  gray rectangle — "just the file" still works). Thumbnails are **per-version**
+  (they change with the bytes) and stored in a content-addressed **derived store**
+  (`server/src/storage/derived.js`, `<dataDir>/derived/<hash>.thumb.<ext>`); the
+  version records `thumbnail_type` (migration 004). Plugins run **in registry
+  order** and each `extract()` receives `thumbnailTarget` ({maxEdge:512,
+  format:'webp'}, core-provided) and `prior` (accumulated metadata + whether a
+  thumbnail already exists). **First plugin to return one wins**; later plugins
+  see `prior.thumbnail === true` and skip. Only `plugin-image` makes them today
+  (via `sharp`, auto-oriented). Served at `GET /api/assets/:id/thumbnail`
+  (cache-busted per version); list/search expose `thumbnail_type`. Grid uses
+  thumbnail-or-gray (no full-image fallback).
+- **Config loader:** `server/src/plugins/config.js` `loadPluginRegistry(dataDir)`
+  dynamic-imports `<dataDir>/archive.config.js` by file URL, so its plugin imports
+  resolve against the instance's own `node_modules`.
+- **Live updates (no refresh):** the asset grid is a pure function of
+  `query -> items`. The client (`<archive-assets>`) re-runs its current query and
+  **reconciles cards by asset id** (updating only those whose signature —
+  thumbnail/version/status/size/name — changed, so unchanged thumbnails don't
+  reload). Two triggers funnel into one `refresh()`: query changes
+  (`<archive-search>` → `archive:query`) and data changes pushed over **SSE**
+  (`GET /api/events`, plain `text/event-stream` on node:http). Write routes and
+  the extraction worker emit `change` on a shared in-process bus
+  (`events/bus.js`); the SSE route forwards to browsers; the client coalesces
+  bursts. So a `pending` card gains its thumbnail the moment extraction finishes.
+- **Local dev needs no per-instance install:** `npm run dev:init` creates
+  `./dev-instance` (inside the repo) with `--no-install`; its config imports the
+  `@archive/plugin-*` packages by name, which resolve through the workspace
+  symlinks in the repo's root `node_modules`. `npm run dev` starts it. Verified:
+  the app loads real plugins and extracts metadata with no `node_modules` in the
+  instance.
+
+### Source map (within packages/server/src, unless noted)
+
+- `packages/cli/{bin/archive.js, src/cli.js, src/prompt.js}` — CLI.
+- `config.js` — flag/env/default config resolution (+ `parseFlags`).
+- `db/` — `index.js` (single `node:sqlite` access point), `migrate.js`, `migrations/*.sql`.
+- `storage/blobs.js` — content-addressed blob store (SHA-256, sharded, dedup).
+- `auth/` — `passwords.js` (scrypt), `users.js`, `sessions.js`.
+- `assets/assets.js` — asset/version data layer + versioning rules.
+- `server/` — `index.js` (createApp), `router.js`, `respond.js`, `middleware.js`,
+  `upload.js`, `routes/{auth,assets,search,pages,events}.js`.
+- `events/bus.js` — in-process `change` pub/sub shared by routes + worker + SSE.
+- `plugins/` — `registry.js` (`PluginRegistry` + apiVersion check), `config.js` (loader).
+- `metadata/` — `core.js` (shared core-metadata), `store.js` (typed EAV + FTS
+  writes; `indexVersionCore` for upload-time indexing).
+- `storage/` — `blobs.js`, `derived.js` (thumbnails).
+- `worker/` — `extract.js` (core + plugin merge, thumbnails), `queue.js`, `index.js`
+  (`ExtractionWorker`, `runPending`; emits `change`; requires an explicit registry).
+- `web/` — `render.js` + `public/{app.js,styles.css}`; `<archive-assets>` does
+  keyed reconciliation + SSE, `<archive-search>` emits query events.
+- Tests live in each package's `test/`; `server/test/helpers/` boots an ephemeral
+  app and provides a `fakeRegistry()` so server tests don't depend on the real
+  plugin packages (those are tested in their own packages).
+
+### Not yet done / known gaps
+
+- `@archive/*` packages are **not published to npm** yet, so `archive init` with a
+  real install only works once published; today the working path is the in-repo
+  dev instance (workspace symlinks). Publishing is a future step.
+- Thumbnails exist for **images** (plugin-image via sharp). Video/PDF/etc.
+  thumbnails are future plugins — they just need to return a `thumbnail` from
+  `extract()`; the derived-store + serving machinery already handles them.
+
+## Use cases
+
+Here's a few examples of users who would want to use this application:
+
+- I am an avid photographer and want to store all of my photos in an archive. I
+  want to be able to easily find images through search and share collections of
+  these photos why my friends and family.
+- I am a professor and want to store all of my research, including PDF files,
+  links and references in an archive. I want to be able to easily filter this
+  research and share filtered lists to my collaborators. or the public.
+- I am a writer and wants to archive all of my writing.
+
+ALSO WORKS ON MARKDOWN FILES!! THERE CAN BE AN EDITOR AND IT CAN REFER TO IMAGES
+IN THE ARCHIVE!!!
+
+## Technical principles
+
+- The application should run on a single instance using only JavaScript and
+  SQLite. My dream is to just buy a Hertzner instance and run it all on that.
+- We should rely on as few external dependencies as possible. We shouldn't
+  implement complex stuff such as image resizing, but let's keep the stuff
+  relying on external packages isolated and easy to replace.
+- Everything should be test driven.
+- When I run the app and need to upgrade, it should be possible to upgrade
+  entirely through NPM. Any DB migrations and such should be done in post
+  installcd
+
+Make CSS spec Make UI spec Use shared components
+
+Support all file types with plugins per file type that says how to handle it Can
+be extended with open source file plugins Metadata extractors based on filetypes
+(image metadata, object recognition, PDF summary, etc).
+
+## Future plans
+
+It could have output editors, allowing people to write documents or slideshows
+using the images. These outputs should be built into the software.
+
+It should be easy to upload files from your phone or computer. We could
+eventually make a mobile app that just syncs all pictures to the archive.
+
+## Agent instructions
+
+Update Claude.md as you go along including with the architecture, requirements
+and this instruction to keep updating Claude.md Always present decisions with
+pros and cons

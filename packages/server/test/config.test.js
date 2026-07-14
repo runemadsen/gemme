@@ -4,16 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveConfig, parseFlags, DEFAULT_PORT } from '../src/lib/config.js';
 
-test('defaults to ~/.archive and default port with no flags or env', () => {
+test('defaults to ~/.gemme and default port with no flags or env', () => {
   const cfg = resolveConfig({ argv: [], env: {} });
-  assert.equal(cfg.dataDir, path.join(os.homedir(), '.archive'));
+  assert.equal(cfg.dataDir, path.join(os.homedir(), '.gemme'));
   assert.equal(cfg.port, DEFAULT_PORT);
 });
 
 test('flags take precedence over env', () => {
   const cfg = resolveConfig({
     argv: ['--port', '8080', '--data-dir', '/tmp/arch'],
-    env: { ARCHIVE_PORT: '9999', ARCHIVE_DATA_DIR: '/other' },
+    env: { GEMME_PORT: '9999', GEMME_DATA_DIR: '/other' },
   });
   assert.equal(cfg.port, 8080);
   assert.equal(cfg.dataDir, path.resolve('/tmp/arch'));

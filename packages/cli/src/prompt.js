@@ -5,7 +5,7 @@ import readline from 'node:readline';
  * a TTY stdin (to read keystrokes) and a TTY stdout (so the prompt is visible
  * and unbuffered). Under `npm run`, stdout is often a pipe; requiring both
  * avoids silently buffering invisible prompts — the CLI then asks for flags
- * instead. Run `archive create-user` directly in a terminal to be prompted.
+ * instead. Run `gemme create-user` directly in a terminal to be prompted.
  */
 export function isInteractive() {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);

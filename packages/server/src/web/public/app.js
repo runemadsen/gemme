@@ -30,7 +30,7 @@ function cardSig(item) {
 function cardInner(item) {
   const pending = item.extraction_status === 'pending';
   const thumb = item.thumbnail_type
-    ? `<div class="thumb"><img loading="lazy" src="/api/assets/${item.id}/thumbnail?v=${item.current_version_id}" alt=""></div>`
+    ? `<div class="thumb"><img loading="lazy" src="/api/files/${item.id}/versions/${item.current_version_id}/thumbnail" alt=""></div>`
     : `<div class="thumb"><div class="filetype">${esc((item.mime_type || 'file').split('/').pop())}</div></div>`;
   return `${thumb}<div class="meta">
     <div class="name" title="${esc(item.original_filename)}">${esc(item.original_filename)}</div>
@@ -41,7 +41,7 @@ function cardInner(item) {
 function makeCard(item) {
   const a = document.createElement('a');
   a.className = 'card';
-  a.href = `/assets/${item.id}`;
+  a.href = `/files/${item.id}`;
   a.dataset.id = String(item.id);
   a.dataset.sig = cardSig(item);
   a.innerHTML = cardInner(item);
@@ -50,7 +50,7 @@ function makeCard(item) {
 
 function updateCard(el, item) {
   el.dataset.sig = cardSig(item);
-  el.href = `/assets/${item.id}`;
+  el.href = `/files/${item.id}`;
   el.innerHTML = cardInner(item);
 }
 
@@ -313,9 +313,9 @@ const store = {
 
 // ---- components -----------------------------------------------------------
 
-// <archive-assets> — the grid. Re-renders on query changes (store) and data
-// changes (uploads / server-sent), reconciling by asset id.
-class ArchiveAssets extends HTMLElement {
+// <gemme-files> — the grid. Re-renders on query changes (store) and data
+// changes (uploads / server-sent), reconciling by file id.
+class GemmeFiles extends HTMLElement {
   connectedCallback() {
     this.grid = this.querySelector('#results') || this.appendChild(Object.assign(document.createElement('div'), { id: 'results', className: 'grid' }));
     this.seq = 0;
@@ -324,15 +324,15 @@ class ArchiveAssets extends HTMLElement {
     // only refetch on subsequent changes.
     this.unsubscribe = store.subscribe(() => this.refresh());
     this.onData = () => this.scheduleRefresh();
-    document.addEventListener('archive:changed', this.onData);
-    document.addEventListener('archive:server-change', this.onData);
+    document.addEventListener('gemme:changed', this.onData);
+    document.addEventListener('gemme:server-change', this.onData);
     connectServerEvents();
   }
 
   disconnectedCallback() {
     this.unsubscribe?.();
-    document.removeEventListener('archive:changed', this.onData);
-    document.removeEventListener('archive:server-change', this.onData);
+    document.removeEventListener('gemme:changed', this.onData);
+    document.removeEventListener('gemme:server-change', this.onData);
     clearTimeout(this.debounce);
   }
 
@@ -347,7 +347,7 @@ class ArchiveAssets extends HTMLElement {
     if (seq !== this.seq) return;
     if (data.error) {
       this.grid.innerHTML = `<p class="error">${esc(data.error)}</p>`;
-      document.dispatchEvent(new CustomEvent('archive:results', { detail: { page: 1, pages: 1, total: 0 } }));
+      document.dispatchEvent(new CustomEvent('gemme:results', { detail: { page: 1, pages: 1, total: 0 } }));
       return;
     }
     reconcile(this.grid, data.items || []);
@@ -355,13 +355,13 @@ class ArchiveAssets extends HTMLElement {
     // adopt it without triggering another fetch.
     if (typeof data.page === 'number' && data.page !== store.page) store.adoptPage(data.page);
     document.dispatchEvent(
-      new CustomEvent('archive:results', { detail: { page: data.page, pages: data.pages, total: data.total } })
+      new CustomEvent('gemme:results', { detail: { page: data.page, pages: data.pages, total: data.total } })
     );
   }
 }
 
-// <archive-search> — shows the canonical query; searches only on Enter.
-class ArchiveSearch extends HTMLElement {
+// <gemme-search> — shows the canonical query; searches only on Enter.
+class GemmeSearch extends HTMLElement {
   connectedCallback() {
     const placeholder = this.getAttribute('placeholder') || 'Search…';
     this.innerHTML = `<input type="search" class="search" placeholder="${esc(placeholder)}" autocomplete="off">`;
@@ -386,23 +386,23 @@ class ArchiveSearch extends HTMLElement {
   }
 }
 
-// <archive-filters> — checkboxes reflecting store.filters; toggling updates it.
-class ArchiveFilters extends HTMLElement {
+// <gemme-filters> — checkboxes reflecting store.filters; toggling updates it.
+class GemmeFilters extends HTMLElement {
   connectedCallback() {
     this.facets = {};
     this.debounce = null;
-    this.innerHTML = `<h2>Filters</h2><p class="empty">Loading…</p>`;
+    this.innerHTML = `<p class="empty">Loading…</p>`;
     this.unsubscribe = store.subscribe(() => this.render());
     this.onData = () => this.scheduleLoad();
-    document.addEventListener('archive:changed', this.onData);
-    document.addEventListener('archive:server-change', this.onData);
+    document.addEventListener('gemme:changed', this.onData);
+    document.addEventListener('gemme:server-change', this.onData);
     this.load();
   }
 
   disconnectedCallback() {
     this.unsubscribe?.();
-    document.removeEventListener('archive:changed', this.onData);
-    document.removeEventListener('archive:server-change', this.onData);
+    document.removeEventListener('gemme:changed', this.onData);
+    document.removeEventListener('gemme:server-change', this.onData);
     clearTimeout(this.debounce);
   }
 
@@ -421,7 +421,7 @@ class ArchiveFilters extends HTMLElement {
   render() {
     const { filters } = store.snapshot();
     const sections = FACETS.map((f) => this.section(f, filters)).filter(Boolean);
-    this.innerHTML = `<h2>Filters</h2>${sections.join('') || '<p class="empty">No filters yet.</p>'}`;
+    this.innerHTML = sections.join('') || '<p class="empty">No filters yet.</p>';
     this.querySelectorAll('input[type=checkbox]').forEach((cb) =>
       cb.addEventListener('change', () => store.toggleFilter(cb.dataset.key, cb.value, cb.checked))
     );
@@ -445,9 +445,9 @@ class ArchiveFilters extends HTMLElement {
   }
 }
 
-// <archive-controls> — sort / direction / per-page selects (server-rendered
+// <gemme-controls> — sort / direction / per-page selects (server-rendered
 // markup; we attach handlers and keep the values synced to the store).
-class ArchiveControls extends HTMLElement {
+class GemmeControls extends HTMLElement {
   connectedCallback() {
     this.selects = {};
     for (const sel of this.querySelectorAll('select[data-control]')) {
@@ -472,9 +472,9 @@ class ArchiveControls extends HTMLElement {
   }
 }
 
-// <archive-pager> — numbered links + Prev/Next. Initial page/pages come from
-// server-rendered data attributes; updates arrive via `archive:results`.
-class ArchivePager extends HTMLElement {
+// <gemme-pager> — numbered links + Prev/Next. Initial page/pages come from
+// server-rendered data attributes; updates arrive via `gemme:results`.
+class GemmePager extends HTMLElement {
   connectedCallback() {
     this.page = Number(this.dataset.page) || 1;
     this.pages = Number(this.dataset.pages) || 1;
@@ -483,7 +483,7 @@ class ArchivePager extends HTMLElement {
       this.pages = e.detail.pages || 1;
       this.render();
     };
-    document.addEventListener('archive:results', this.onResults);
+    document.addEventListener('gemme:results', this.onResults);
     this.addEventListener('click', (e) => {
       const link = e.target.closest('a.page[data-page]');
       if (!link) return;
@@ -493,7 +493,7 @@ class ArchivePager extends HTMLElement {
     // Server already rendered the initial pager markup; leave it in place.
   }
   disconnectedCallback() {
-    document.removeEventListener('archive:results', this.onResults);
+    document.removeEventListener('gemme:results', this.onResults);
   }
   render() {
     this.innerHTML = pagerHtml(this.page, this.pages);
@@ -557,21 +557,21 @@ async function fetchCollections() {
   return res.ok ? (await res.json()).collections : [];
 }
 
-// <archive-collections> — sidebar tree; multi-select by NAME drives the filter.
-class ArchiveCollections extends HTMLElement {
+// <gemme-collections> — sidebar tree; multi-select by NAME drives the filter.
+class GemmeCollections extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `<h2>Collections</h2><div class="tree"><p class="empty">Loading…</p></div>`;
     this.treeEl = this.querySelector('.tree');
     this.unsubscribe = store.subscribe(() => this.markSelected());
     this.onData = () => this.scheduleLoad();
-    document.addEventListener('archive:changed', this.onData);
-    document.addEventListener('archive:server-change', this.onData);
+    document.addEventListener('gemme:changed', this.onData);
+    document.addEventListener('gemme:server-change', this.onData);
     this.load();
   }
   disconnectedCallback() {
     this.unsubscribe?.();
-    document.removeEventListener('archive:changed', this.onData);
-    document.removeEventListener('archive:server-change', this.onData);
+    document.removeEventListener('gemme:changed', this.onData);
+    document.removeEventListener('gemme:server-change', this.onData);
     clearTimeout(this.debounce);
   }
   scheduleLoad() {
@@ -610,21 +610,21 @@ function node(n, sel) {
   return `<li>
     <div class="crow">${toggle}
       <label class="cname"><input type="checkbox" value="${esc(n.name)}" ${sel.has(n.name) ? 'checked' : ''}> <span>${esc(n.name)}</span></label>
-      <span class="count">${n.assetCount}</span>
+      <span class="count">${n.fileCount}</span>
     </div>${kids}</li>`;
 }
 
-// <archive-asset-collections> — membership checkboxes (by id) on the detail page.
-class ArchiveAssetCollections extends HTMLElement {
+// <gemme-file-collections> — membership checkboxes (by id) on the detail page.
+class GemmeFileCollections extends HTMLElement {
   async connectedCallback() {
-    this.assetId = Number(this.dataset.asset);
+    this.fileId = Number(this.dataset.file);
     this.innerHTML = `<p class="empty">Loading…</p>`;
     await this.load();
   }
   async load() {
     const [collections, memRes] = await Promise.all([
       fetchCollections(),
-      fetch(`/api/assets/${this.assetId}/collections`).then((r) => (r.ok ? r.json() : { collectionIds: [] })),
+      fetch(`/api/files/${this.fileId}/collections`).then((r) => (r.ok ? r.json() : { collectionIds: [] })),
     ]);
     this.member = new Set(memRes.collectionIds);
     this.roots = buildTree(collections);
@@ -643,24 +643,24 @@ class ArchiveAssetCollections extends HTMLElement {
   async toggle(cb) {
     const id = Number(cb.dataset.id);
     const res = cb.checked
-      ? await fetch(`/api/assets/${this.assetId}/collections`, {
+      ? await fetch(`/api/files/${this.fileId}/collections`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ collectionId: id }),
         })
-      : await fetch(`/api/assets/${this.assetId}/collections/${id}`, { method: 'DELETE' });
+      : await fetch(`/api/files/${this.fileId}/collections/${id}`, { method: 'DELETE' });
     if (res.ok) {
       if (cb.checked) this.member.add(id);
       else this.member.delete(id);
-      document.dispatchEvent(new CustomEvent('archive:changed')); // refresh counts elsewhere
+      document.dispatchEvent(new CustomEvent('gemme:changed')); // refresh counts elsewhere
     } else {
       cb.checked = !cb.checked;
     }
   }
 }
 
-// <archive-collection-manager> — CRUD tree on the /collections page.
-class ArchiveCollectionManager extends HTMLElement {
+// <gemme-collection-manager> — CRUD tree on the /collections page.
+class GemmeCollectionManager extends HTMLElement {
   connectedCallback() {
     this.innerHTML = `<p class="empty">Loading…</p>`;
     this.load();
@@ -689,7 +689,7 @@ class ArchiveCollectionManager extends HTMLElement {
       this.list.filter((c) => c.id !== n.id).map((c) => `<option value="${c.id}" ${n.parent_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
     const kids = n.children.length ? `<ul>${n.children.map((c) => this.node(c)).join('')}</ul>` : '';
     return `<li><div class="crow manage">
-      <span class="cname">${esc(n.name)}</span><span class="count">${n.assetCount}</span>
+      <span class="cname">${esc(n.name)}</span><span class="count">${n.fileCount}</span>
       <select data-move="${n.id}" title="Move to parent">${moveOpts}</select>
       <button type="button" data-act="rename" data-id="${n.id}">Rename</button>
       <button type="button" data-act="delete" data-id="${n.id}">Delete</button>
@@ -710,7 +710,7 @@ class ArchiveCollectionManager extends HTMLElement {
       if (name && name.trim())
         await fetch(`/api/collections/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
     } else if (b.dataset.act === 'delete') {
-      if (!confirm('Delete this collection and all its sub-collections? Assets are not deleted.')) return;
+      if (!confirm('Delete this collection and all its sub-collections? Files are not deleted.')) return;
       await fetch(`/api/collections/${id}`, { method: 'DELETE' });
     }
     await this.load();
@@ -724,18 +724,33 @@ class ArchiveCollectionManager extends HTMLElement {
   }
 }
 
-// <archive-uploader> — drag/drop or pick files; one request per file, with progress.
-class ArchiveUploader extends HTMLElement {
+// <gemme-uploader> — drag/drop or pick files (one request per file, with
+// progress), then file the just-uploaded batch into collections by clicking the
+// tree. Each new drop starts a fresh round: the file list, the batch of file
+// ids, and the collection selection all reset, so uploading over many rounds
+// always assigns collections to just the most recent batch.
+class GemmeUploader extends HTMLElement {
   connectedCallback() {
+    this.round = 0; // bumps every add(); stale in-flight uploads bail on mismatch
+    this.batch = []; // file ids created/resolved in the current round
+    this.selected = new Set(); // collection ids applied to the current batch
     this.innerHTML = `
       <div class="dropzone" tabindex="0">
         <p>Drag files here, or <button type="button" class="pick">choose files</button></p>
         <input type="file" multiple hidden>
       </div>
-      <ul class="upload-list"></ul>`;
+      <ul class="upload-list"></ul>
+      <section class="assign" hidden>
+        <h2>Add to collections</h2>
+        <p class="assign-hint sub"></p>
+        <div class="assign-tree"><p class="empty">Loading…</p></div>
+      </section>`;
     this.zone = this.querySelector('.dropzone');
     this.fileInput = this.querySelector('input[type=file]');
     this.list = this.querySelector('.upload-list');
+    this.assign = this.querySelector('.assign');
+    this.assignHint = this.querySelector('.assign-hint');
+    this.assignTree = this.querySelector('.assign-tree');
 
     this.querySelector('.pick').addEventListener('click', () => this.fileInput.click());
     this.fileInput.addEventListener('change', () => this.add(this.fileInput.files));
@@ -748,35 +763,121 @@ class ArchiveUploader extends HTMLElement {
       ev.preventDefault();
       if (ev.dataTransfer?.files?.length) this.add(ev.dataTransfer.files);
     });
+
+    this.loadCollections();
+  }
+
+  async loadCollections() {
+    this.roots = buildTree(await fetchCollections());
+    this.renderTree();
+  }
+
+  renderTree() {
+    if (!this.roots || !this.roots.length) {
+      this.assignTree.innerHTML = `<p class="empty">No collections yet. Create some on the <a href="/collections">Collections</a> page.</p>`;
+      return;
+    }
+    const cnode = (n) =>
+      `<li><label class="cname"><input type="checkbox" data-id="${n.id}" ${this.selected.has(n.id) ? 'checked' : ''}> <span>${esc(n.name)}</span></label>${n.children.length ? `<ul>${n.children.map(cnode).join('')}</ul>` : ''}</li>`;
+    this.assignTree.innerHTML = `<ul class="ctree">${this.roots.map(cnode).join('')}</ul>`;
+    this.assignTree.querySelectorAll('input[type=checkbox]').forEach((cb) =>
+      cb.addEventListener('change', () => this.toggleCollection(cb))
+    );
+  }
+
+  // Show/hide the collection tree and update its hint for the current batch.
+  syncAssign() {
+    const n = this.batch.length;
+    this.assign.hidden = n === 0;
+    if (n > 0) this.assignHint.textContent = `Add ${n} uploaded file${n === 1 ? '' : 's'} to collections:`;
   }
 
   async add(fileList) {
+    const round = ++this.round;
+    // Fresh round: clear the previous batch, selection, and file list.
+    this.batch = [];
+    this.selected = new Set();
+    this.list.innerHTML = '';
+    this.renderTree();
+    this.syncAssign();
+
     const files = [...fileList];
-    let anySucceeded = false;
+    let anyCreated = false;
     await Promise.all(
       files.map(async (file) => {
         const row = document.createElement('li');
         row.textContent = `${file.name} — uploading…`;
         this.list.appendChild(row);
         try {
-          await uploadFile(file, (pct) => (row.textContent = `${file.name} — ${pct}%`));
-          row.textContent = `${file.name} — done`;
-          row.className = 'ok';
-          anySucceeded = true;
+          const result = await uploadFile(file, (pct) => (row.textContent = `${file.name} — ${pct}%`));
+          if (this.round !== round) return; // superseded by a newer round
+          if (result.skipped) {
+            row.textContent = `${file.name} — skipped (already imported)`;
+            row.className = 'skip';
+          } else {
+            row.textContent = `${file.name} — done`;
+            row.className = 'ok';
+            anyCreated = true;
+          }
+          // Include both created and skipped files so a dropped duplicate can
+          // still be filed into a collection.
+          const id = result.file?.id;
+          if (id != null) {
+            this.batch.push(id);
+            this.syncAssign();
+            // If a collection was already ticked mid-upload, file this one too.
+            for (const cid of this.selected) this.postMembership(id, cid);
+          }
         } catch (err) {
+          if (this.round !== round) return;
           row.textContent = `${file.name} — failed: ${err.message}`;
           row.className = 'fail';
         }
       })
     );
-    if (anySucceeded) document.dispatchEvent(new CustomEvent('archive:changed'));
+    if (this.round !== round) return;
+    if (anyCreated) document.dispatchEvent(new CustomEvent('gemme:changed'));
+    this.syncAssign();
+  }
+
+  // Ticking a collection files (or unfiles) every file in the current batch.
+  async toggleCollection(cb) {
+    const cid = Number(cb.dataset.id);
+    const on = cb.checked;
+    if (on) this.selected.add(cid);
+    else this.selected.delete(cid);
+    const ids = [...this.batch];
+    const results = await Promise.all(
+      ids.map((fileId) => (on ? this.postMembership(fileId, cid) : this.deleteMembership(fileId, cid)))
+    );
+    if (results.some((ok) => !ok)) {
+      cb.checked = !on; // revert on any failure
+      if (on) this.selected.delete(cid);
+      else this.selected.add(cid);
+    } else {
+      document.dispatchEvent(new CustomEvent('gemme:changed')); // refresh counts elsewhere
+    }
+  }
+
+  async postMembership(fileId, collectionId) {
+    const res = await fetch(`/api/files/${fileId}/collections`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ collectionId }),
+    });
+    return res.ok;
+  }
+
+  async deleteMembership(fileId, collectionId) {
+    const res = await fetch(`/api/files/${fileId}/collections/${collectionId}`, { method: 'DELETE' });
+    return res.ok;
   }
 }
 
 function uploadFile(file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/assets');
+    xhr.open('POST', '/api/files');
     xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.upload.onprogress = (e) => {
@@ -807,7 +908,7 @@ function connectServerEvents() {
   try {
     const source = new EventSource('/api/events');
     source.addEventListener('change', (e) => {
-      document.dispatchEvent(new CustomEvent('archive:server-change', { detail: safeJson(e.data) }));
+      document.dispatchEvent(new CustomEvent('gemme:server-change', { detail: safeJson(e.data) }));
     });
   } catch {
     serverEventsStarted = false;
@@ -854,14 +955,14 @@ function wireLogout() {
 // Initialize the store from the URL before components upgrade and read it.
 store.init(resolveUrlState());
 
-customElements.define('archive-assets', ArchiveAssets);
-customElements.define('archive-search', ArchiveSearch);
-customElements.define('archive-filters', ArchiveFilters);
-customElements.define('archive-collections', ArchiveCollections);
-customElements.define('archive-asset-collections', ArchiveAssetCollections);
-customElements.define('archive-collection-manager', ArchiveCollectionManager);
-customElements.define('archive-controls', ArchiveControls);
-customElements.define('archive-pager', ArchivePager);
-customElements.define('archive-uploader', ArchiveUploader);
+customElements.define('gemme-files', GemmeFiles);
+customElements.define('gemme-search', GemmeSearch);
+customElements.define('gemme-filters', GemmeFilters);
+customElements.define('gemme-collections', GemmeCollections);
+customElements.define('gemme-file-collections', GemmeFileCollections);
+customElements.define('gemme-collection-manager', GemmeCollectionManager);
+customElements.define('gemme-controls', GemmeControls);
+customElements.define('gemme-pager', GemmePager);
+customElements.define('gemme-uploader', GemmeUploader);
 wireLogin();
 wireLogout();

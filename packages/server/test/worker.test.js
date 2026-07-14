@@ -12,7 +12,7 @@ import { getVersionMetadata } from '../src/lib/metadata/store.js';
 import { fakeRegistry } from './helpers/plugins.js';
 
 async function setup() {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-worker-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-worker-'));
   const db = openMemoryDatabase();
   const blobStore = new BlobStore(dir);
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x')
@@ -20,15 +20,15 @@ async function setup() {
   async function seedVersion({ filename, mimeType, buffer }) {
     const { hash, size } = await blobStore.putBuffer(buffer);
     db.exec('BEGIN');
-    const asset = db
-      .prepare('INSERT INTO assets (original_filename, created_by) VALUES (?, ?)')
+    const file = db
+      .prepare('INSERT INTO files (original_filename, created_by) VALUES (?, ?)')
       .run(filename, userId);
     const version = db
-      .prepare('INSERT INTO versions (asset_id, content_hash, byte_size, mime_type) VALUES (?, ?, ?, ?)')
-      .run(asset.lastInsertRowid, hash, size, mimeType);
-    db.prepare('UPDATE assets SET current_version_id = ? WHERE id = ?').run(
+      .prepare('INSERT INTO versions (file_id, content_hash, byte_size, mime_type) VALUES (?, ?, ?, ?)')
+      .run(file.lastInsertRowid, hash, size, mimeType);
+    db.prepare('UPDATE files SET current_version_id = ? WHERE id = ?').run(
       version.lastInsertRowid,
-      asset.lastInsertRowid
+      file.lastInsertRowid
     );
     db.exec('COMMIT');
     return version.lastInsertRowid;

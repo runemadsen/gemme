@@ -1,13 +1,13 @@
 {
-  "name": "@archive/server",
+  "name": "@gemme/server",
   "version": "0.0.0",
-  "description": "Archive core: storage, versioning, search, extraction worker, HTTP API",
+  "description": "Gemme core: storage, versioning, search, extraction worker, HTTP API",
   "type": "module",
   "exports": {
     ".": "./src/index.js"
   },
   "dependencies": {
-    "@archive/plugin-api": "*"
+    "@gemme/plugin-api": "*"
   },
   "scripts": {
     "test": "node --test"

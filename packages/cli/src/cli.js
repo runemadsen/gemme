@@ -11,32 +11,32 @@ import {
   loadPluginRegistry,
   createEventBus,
   CONFIG_FILENAME,
-} from '@archive/server';
+} from '@gemme/server';
 import { createPrompter, isInteractive } from './prompt.js';
 
-const USAGE = `archive — self-hosted, search-first file archive
+const USAGE = `gemme — self-hosted, search-first file archive
 
 Usage:
-  archive init [--data-dir <path>] [--no-install]
-  archive start [--port <n>] [--data-dir <path>]
-  archive migrate [--data-dir <path>]
-  archive create-user [--email <e>] [--name <n>] [--password <p>] [--data-dir <path>]
-  archive plugins add <package> [--data-dir <path>]
-  archive help
+  gemme init [--data-dir <path>] [--no-install]
+  gemme start [--port <n>] [--data-dir <path>]
+  gemme migrate [--data-dir <path>]
+  gemme create-user [--email <e>] [--name <n>] [--password <p>] [--data-dir <path>]
+  gemme plugins add <package> [--data-dir <path>]
+  gemme help
 
 Options:
-  --data-dir <path>   Where the SQLite db, blobs and config live (default: ~/.archive)
+  --data-dir <path>   Where the SQLite db, blobs and config live (default: ~/.gemme)
   --port <n>          HTTP port for \`start\` (default: 4321)
   --no-install        (init) scaffold config without running npm install
 
 Environment:
-  ARCHIVE_DATA_DIR, ARCHIVE_PORT (or PORT)
+  GEMME_DATA_DIR, GEMME_PORT (or PORT)
 `;
 
-// The CLI package a scaffolded project depends on (provides the `archive` bin).
-const CLI_PKG = '@archive/cli';
+// The CLI package a scaffolded project depends on (provides the `gemme` bin).
+const CLI_PKG = '@gemme/cli';
 // Plugins enabled in a freshly-initialized instance.
-const DEFAULT_PLUGINS = ['@archive/plugin-text', '@archive/plugin-image'];
+const DEFAULT_PLUGINS = ['@gemme/plugin-text', '@gemme/plugin-image'];
 
 export async function runCli(argv) {
   const [command, ...rest] = argv;
@@ -71,7 +71,7 @@ async function cmdMigrate(argv) {
 // --- init ------------------------------------------------------------------
 
 function pluginLocalName(pkg) {
-  // '@archive/plugin-image' -> 'pluginImage'
+  // '@gemme/plugin-image' -> 'pluginImage'
   const base = pkg.split('/').pop();
   return base.replace(/[-_](\w)/g, (_, c) => c.toUpperCase()).replace(/\W/g, '');
 }
@@ -81,7 +81,7 @@ function renderConfig(plugins) {
   const entries = plugins.map((p) => `    ${pluginLocalName(p)}(),`).join('\n');
   return `${imports}
 
-// Archive instance config. Enable/disable plugins here, or add your own —
+// Gemme instance config. Enable/disable plugins here, or add your own —
 // any module exporting a plugin factory (local path or npm package) works.
 export default {
   plugins: [
@@ -93,13 +93,13 @@ ${entries}
 
 async function cmdInit(argv) {
   const flags = parseFlags(argv);
-  // `init` scaffolds the current directory into an archive project by default
-  // (the npx flow: `mkdir my-archive && cd my-archive && npx @archive/cli init`).
-  const dataDir = path.resolve(flags['data-dir'] ?? process.env.ARCHIVE_DATA_DIR ?? '.');
+  // `init` scaffolds the current directory into a Gemme project by default
+  // (the npx flow: `mkdir my-gemme && cd my-gemme && npx @gemme/cli init`).
+  const dataDir = path.resolve(flags['data-dir'] ?? process.env.GEMME_DATA_DIR ?? '.');
   fs.mkdirSync(dataDir, { recursive: true });
 
   // Scaffold a runnable npm project: the CLI + plugins are local dependencies,
-  // and `npm run start` / `npm run create-user` drive the local `archive` bin.
+  // and `npm run start` / `npm run create-user` drive the local `gemme` bin.
   const pkgPath = path.join(dataDir, 'package.json');
   if (!fs.existsSync(pkgPath)) {
     const dependencies = {
@@ -110,12 +110,12 @@ async function cmdInit(argv) {
       pkgPath,
       JSON.stringify(
         {
-          name: path.basename(dataDir) || 'archive-instance',
+          name: path.basename(dataDir) || 'gemme-instance',
           private: true,
           type: 'module',
           scripts: {
-            start: 'archive start --data-dir .',
-            'create-user': 'archive create-user --data-dir .',
+            start: 'gemme start --data-dir .',
+            'create-user': 'gemme create-user --data-dir .',
           },
           dependencies,
         },
@@ -142,25 +142,43 @@ async function cmdInit(argv) {
     if (res.status !== 0) throw new Error('npm install failed in the project directory');
   }
 
-  console.log(`
-Archive project ready in ${dataDir}
+  if (flags['no-install']) {
+    // No local `node_modules/.bin/gemme`, so the `npm run create-user` /
+    // `npm run start` scripts in the scaffolded package.json can't resolve the
+    // bin. Drive the CLI directly instead, targeting this data dir. (This is the
+    // in-repo dev-instance path — from the repo root that's `npm run gemme --`.)
+    console.log(`
+Gemme project ready in ${dataDir}
+(deps not installed — the local \`gemme\` bin is unavailable, so the
+package.json scripts won't run; invoke the CLI directly instead)
+
+Next:
+  gemme create-user --data-dir ${dataDir} --email you@example.com --password '<password>'
+  gemme start --data-dir ${dataDir}        # http://localhost:4321
+
+(In this repo, run the CLI via the root package: prefix with \`npm run gemme --\`,
+e.g. \`npm run gemme -- create-user --data-dir ${dataDir} --email you@example.com --password '<password>'\`.)`);
+  } else {
+    console.log(`
+Gemme project ready in ${dataDir}
 
 Next:
   npm run create-user -- --email you@example.com --password '<password>'
   npm run start                    # http://localhost:4321
 
 (For an interactive password prompt, run the binary directly instead:
-  ./node_modules/.bin/archive create-user --data-dir .)`);
+  ./node_modules/.bin/gemme create-user --data-dir .)`);
+  }
 }
 
 // --- plugins ---------------------------------------------------------------
 
 async function cmdPlugins(argv) {
   const [sub, ...rest] = argv;
-  if (sub !== 'add') throw new Error(`Usage: archive plugins add <package>\n\n${USAGE}`);
+  if (sub !== 'add') throw new Error(`Usage: gemme plugins add <package>\n\n${USAGE}`);
   const flags = parseFlags(rest);
   const pkg = rest.find((a) => !a.startsWith('--'));
-  if (!pkg) throw new Error('archive plugins add <package>: missing package name');
+  if (!pkg) throw new Error('gemme plugins add <package>: missing package name');
   const { dataDir } = resolveConfig({ argv: rest });
 
   if (!flags['no-install']) {
@@ -172,7 +190,7 @@ async function cmdPlugins(argv) {
 
 /** Best-effort insertion of a plugin import + factory call into the config. */
 function addPluginToConfig(configPath, pkg) {
-  if (!fs.existsSync(configPath)) throw new Error(`No ${CONFIG_FILENAME} — run \`archive init\` first`);
+  if (!fs.existsSync(configPath)) throw new Error(`No ${CONFIG_FILENAME} — run \`gemme init\` first`);
   const local = pluginLocalName(pkg);
   let src = fs.readFileSync(configPath, 'utf8');
   if (src.includes(`from '${pkg}'`)) {
@@ -207,14 +225,14 @@ export async function resolveCreateUserInputs({
   tty = isInteractive(),
   makePrompter = createPrompter,
 }) {
-  const havePassword = (flags.password ?? env.ARCHIVE_USER_PASSWORD) != null;
+  const havePassword = (flags.password ?? env.GEMME_USER_PASSWORD) != null;
   const guided = tty && !(flags.email != null && havePassword);
 
   if (!guided) {
     return {
       email: flags.email ?? '',
       name: (flags.name ?? '') || null,
-      password: flags.password ?? env.ARCHIVE_USER_PASSWORD ?? '',
+      password: flags.password ?? env.GEMME_USER_PASSWORD ?? '',
     };
   }
 
@@ -223,7 +241,7 @@ export async function resolveCreateUserInputs({
     const email = flags.email ?? (await p.ask('Email: '));
     const name = (flags.name ?? (await p.ask('Name (optional): '))) || null;
     const password =
-      flags.password ?? env.ARCHIVE_USER_PASSWORD ?? (await p.askHidden('Password: '));
+      flags.password ?? env.GEMME_USER_PASSWORD ?? (await p.askHidden('Password: '));
     return { email, name, password };
   } finally {
     p.close();
@@ -238,7 +256,7 @@ async function cmdCreateUser(argv) {
   if (!email || !password) {
     throw new Error(
       'create-user needs an email and password. Pass --email and --password ' +
-        '(or set ARCHIVE_USER_PASSWORD). Interactive prompts only work when the ' +
+        '(or set GEMME_USER_PASSWORD). Interactive prompts only work when the ' +
         'command is run directly in a terminal, not through `npm run`.'
     );
   }
@@ -255,7 +273,7 @@ async function cmdCreateUser(argv) {
 // --- start -----------------------------------------------------------------
 
 async function cmdStart(argv) {
-  const { dataDir, port } = resolveConfig({ argv });
+  const { dataDir, port, dev } = resolveConfig({ argv });
 
   // Load the instance's plugins from its config before touching the DB, so a
   // missing/broken config fails fast with a clear message.
@@ -276,10 +294,13 @@ async function cmdStart(argv) {
   worker.start();
   console.log(`Plugins: ${registry.plugins.map((p) => p.id).join(', ') || '(none)'}`);
 
+  if (dev) console.log('Dev mode: long-lived file caching disabled');
+
   await startServer({
     db,
     port,
     dataDir,
+    dev,
     events,
     onVersionCreated: (versionId) => worker.enqueue(versionId),
   });

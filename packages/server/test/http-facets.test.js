@@ -18,9 +18,9 @@ test('facets endpoint returns extension + type facets from uploaded files', asyn
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
 
-    await app.upload('/api/assets', { filename: 'a.jpg', contentType: 'image/jpeg', body: 'x' });
-    await app.upload('/api/assets', { filename: 'b.jpg', contentType: 'image/jpeg', body: 'y' });
-    await app.upload('/api/assets', { filename: 'c.txt', contentType: 'text/plain', body: 'z' });
+    await app.upload('/api/files', { filename: 'a.jpg', contentType: 'image/jpeg', body: 'x' });
+    await app.upload('/api/files', { filename: 'b.jpg', contentType: 'image/jpeg', body: 'y' });
+    await app.upload('/api/files', { filename: 'c.txt', contentType: 'text/plain', body: 'z' });
 
     const res = await app.get('/api/facets?keys=ext,type');
     assert.equal(res.status, 200);

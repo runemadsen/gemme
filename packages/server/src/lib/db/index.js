@@ -9,13 +9,13 @@ import { migrate } from './migrate.js';
  * swapped for e.g. better-sqlite3 without touching callers.
  *
  * @param {object} opts
- * @param {string} opts.dataDir - directory that holds archive.db
+ * @param {string} opts.dataDir - directory that holds gemme.db
  * @param {boolean} [opts.migrate=true] - run pending migrations on open
  * @returns {import('node:sqlite').DatabaseSync}
  */
 export function openDatabase({ dataDir, migrate: runMigrations = true }) {
   fs.mkdirSync(dataDir, { recursive: true });
-  const dbPath = path.join(dataDir, 'archive.db');
+  const dbPath = path.join(dataDir, 'gemme.db');
   const db = new DatabaseSync(dbPath);
   applyPragmas(db);
   if (runMigrations) migrate(db);

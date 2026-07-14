@@ -55,7 +55,7 @@ export function indexVersionCore(db, versionId) {
   const v = db
     .prepare(
       `SELECT v.id, v.byte_size, v.mime_type, v.created_at, a.original_filename AS filename
-         FROM versions v JOIN assets a ON a.id = v.asset_id
+         FROM versions v JOIN files a ON a.id = v.file_id
         WHERE v.id = ?`
     )
     .get(versionId);

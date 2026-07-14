@@ -59,7 +59,7 @@ test('uploading emits a change on the bus', async () => {
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
 
     const changed = once(app.events, 'change');
-    await app.upload('/api/assets', { filename: 'a.txt', contentType: 'text/plain', body: 'hi' });
+    await app.upload('/api/files', { filename: 'a.txt', contentType: 'text/plain', body: 'hi' });
     const [detail] = await changed;
     assert.equal(detail.type, 'created');
   } finally {
@@ -68,18 +68,18 @@ test('uploading emits a change on the bus', async () => {
 });
 
 test('the worker emits a change after finishing extraction', async () => {
-  const dir = await (await import('node:fs/promises')).mkdtemp('/tmp/archive-ev-');
+  const dir = await (await import('node:fs/promises')).mkdtemp('/tmp/gemme-ev-');
   const db = openMemoryDatabase();
   const events = createEventBus();
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
   const blobStore = new BlobStore(dir);
   const { hash, size } = await blobStore.putBuffer(Buffer.from('hello'));
   db.exec('BEGIN');
-  const a = db.prepare('INSERT INTO assets (original_filename, created_by) VALUES (?, ?)').run('n.txt', userId);
+  const a = db.prepare('INSERT INTO files (original_filename, created_by) VALUES (?, ?)').run('n.txt', userId);
   const v = db
-    .prepare('INSERT INTO versions (asset_id, content_hash, byte_size, mime_type) VALUES (?, ?, ?, ?)')
+    .prepare('INSERT INTO versions (file_id, content_hash, byte_size, mime_type) VALUES (?, ?, ?, ?)')
     .run(a.lastInsertRowid, hash, size, 'text/plain');
-  db.prepare('UPDATE assets SET current_version_id = ? WHERE id = ?').run(v.lastInsertRowid, a.lastInsertRowid);
+  db.prepare('UPDATE files SET current_version_id = ? WHERE id = ?').run(v.lastInsertRowid, a.lastInsertRowid);
   db.exec('COMMIT');
 
   enqueueExtraction(db, v.lastInsertRowid);

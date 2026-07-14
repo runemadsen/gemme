@@ -9,10 +9,10 @@ import { createEventBus } from '../../src/lib/bus.js';
  * Boot an ephemeral app on a random port backed by a temp data directory.
  * Returns a client bound to that server plus a teardown function.
  */
-export async function startTestApp({ onVersionCreated, events = createEventBus() } = {}) {
-  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-test-'));
+export async function startTestApp({ onVersionCreated, events = createEventBus(), dev = false } = {}) {
+  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-test-'));
   const db = openDatabase({ dataDir });
-  const server = createApp({ db, dataDir, onVersionCreated, events });
+  const server = createApp({ db, dataDir, onVersionCreated, events, dev });
   await new Promise((resolve) => server.listen(0, resolve));
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;

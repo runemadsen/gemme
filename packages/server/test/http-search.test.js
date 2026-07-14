@@ -11,10 +11,10 @@ test('filename is searchable immediately, before extraction runs', async () => {
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
-    await app.upload('/api/assets', { filename: 'DSC01234.JPG', contentType: 'image/jpeg', body: 'x' });
+    await app.upload('/api/files', { filename: 'DSC01234.JPG', contentType: 'image/jpeg', body: 'x' });
 
     // Not yet extracted...
-    const list = await app.get('/api/assets');
+    const list = await app.get('/api/files');
     assert.equal(list.json.items[0].extraction_status, 'pending');
 
     // ...but already findable by filename and type.
@@ -31,7 +31,7 @@ test('search endpoint paginates and sorts with meta', async () => {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
     for (const n of ['b.txt', 'a.txt', 'c.txt'])
-      await app.upload('/api/assets', { filename: n, contentType: 'text/plain', body: n });
+      await app.upload('/api/files', { filename: n, contentType: 'text/plain', body: n });
 
     const res = await app.get('/api/search?sort=name&direction=asc&page=2&perPage=1');
     assert.equal(res.status, 200);
@@ -46,7 +46,7 @@ test('search endpoint paginates and sorts with meta', async () => {
   }
 });
 
-test('search endpoint filters uploaded-and-extracted assets', async () => {
+test('search endpoint filters uploaded-and-extracted files', async () => {
   const app = await startTestApp({
     onVersionCreated: (versionId) => enqueueExtraction(app.db, versionId),
   });
@@ -54,8 +54,8 @@ test('search endpoint filters uploaded-and-extracted assets', async () => {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
 
-    await app.upload('/api/assets', { filename: 'trip.md', contentType: 'text/markdown', body: 'mountain sky' });
-    await app.upload('/api/assets', { filename: 'note.txt', contentType: 'text/plain', body: 'grocery list' });
+    await app.upload('/api/files', { filename: 'trip.md', contentType: 'text/markdown', body: 'mountain sky' });
+    await app.upload('/api/files', { filename: 'note.txt', contentType: 'text/plain', body: 'grocery list' });
 
     // process the extraction queue
     await runPending(app.db, { blobStore: new BlobStore(app.dataDir), registry: fakeRegistry() });

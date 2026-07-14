@@ -1,4 +1,4 @@
-import { definePlugin } from '@archive/plugin-api';
+import { definePlugin } from '@gemme/plugin-api';
 import exifr from 'exifr';
 import sharp from 'sharp';
 import { imageSize } from './image-size.js';

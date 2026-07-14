@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import { BlobStore } from '../src/lib/storage/blobs.js';
 
 async function tmpStore() {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-blobs-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-blobs-'));
   return { store: new BlobStore(dir), dir };
 }
 

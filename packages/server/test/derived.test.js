@@ -7,7 +7,7 @@ import path from 'node:path';
 import { DerivedStore, extForType } from '../src/lib/storage/derived.js';
 
 async function tmpStore() {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-derived-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-derived-'));
   return { store: new DerivedStore(dir), dir };
 }
 

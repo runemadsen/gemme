@@ -5,9 +5,9 @@ import {
   createCollection,
   updateCollection,
   deleteCollection,
-  addAssetToCollection,
-  removeAssetFromCollection,
-  getAssetCollectionIds,
+  addFileToCollection,
+  removeFileFromCollection,
+  getFileCollectionIds,
 } from '../../lib/collections.js';
 
 function intParam(value, what) {
@@ -58,30 +58,30 @@ export function registerCollectionRoutes(router) {
 
   // --- membership ---
   router.get(
-    '/api/assets/:id/collections',
+    '/api/files/:id/collections',
     requireAuth((req, res, ctx) => {
-      const assetId = intParam(ctx.params.id, 'asset id');
-      sendJson(res, 200, { collectionIds: getAssetCollectionIds(ctx.db, assetId) });
+      const fileId = intParam(ctx.params.id, 'file id');
+      sendJson(res, 200, { collectionIds: getFileCollectionIds(ctx.db, fileId) });
     })
   );
 
   router.post(
-    '/api/assets/:id/collections',
+    '/api/files/:id/collections',
     requireAuth(async (req, res, ctx) => {
-      const assetId = intParam(ctx.params.id, 'asset id');
+      const fileId = intParam(ctx.params.id, 'file id');
       const { collectionId } = await readJson(req);
-      addAssetToCollection(ctx.db, assetId, intParam(collectionId, 'collection id'));
+      addFileToCollection(ctx.db, fileId, intParam(collectionId, 'collection id'));
       ctx.events?.emit('change', { type: 'membership' });
       sendJson(res, 200, { ok: true });
     })
   );
 
   router.delete(
-    '/api/assets/:id/collections/:cid',
+    '/api/files/:id/collections/:cid',
     requireAuth((req, res, ctx) => {
-      const assetId = intParam(ctx.params.id, 'asset id');
+      const fileId = intParam(ctx.params.id, 'file id');
       const cid = intParam(ctx.params.cid, 'collection id');
-      removeAssetFromCollection(ctx.db, assetId, cid);
+      removeFileFromCollection(ctx.db, fileId, cid);
       ctx.events?.emit('change', { type: 'membership' });
       sendJson(res, 200, { ok: true });
     })

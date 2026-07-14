@@ -17,16 +17,21 @@ export function resolveConfig({ argv = [], env = process.env } = {}) {
   const flags = parseFlags(argv);
 
   const dataDir = path.resolve(
-    flags['data-dir'] ?? env.ARCHIVE_DATA_DIR ?? path.join(os.homedir(), '.archive')
+    flags['data-dir'] ?? env.GEMME_DATA_DIR ?? path.join(os.homedir(), '.gemme')
   );
 
-  const rawPort = flags.port ?? env.ARCHIVE_PORT ?? env.PORT;
+  const rawPort = flags.port ?? env.GEMME_PORT ?? env.PORT;
   const port = rawPort === undefined ? DEFAULT_PORT : Number(rawPort);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`Invalid port: ${rawPort}`);
   }
 
-  return { dataDir, port };
+  // Dev mode disables long-lived file caching (see the image cache policy in
+  // routes/files.js): re-running extraction locally must never poison the
+  // browser cache. Off by default — real instances run in production mode.
+  const dev = flags.dev === true || flags.dev === 'true' || env.GEMME_DEV === '1' || env.GEMME_DEV === 'true';
+
+  return { dataDir, port, dev };
 }
 
 /**

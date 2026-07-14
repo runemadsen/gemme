@@ -5,13 +5,13 @@ import { Router } from '../src/server/router.js';
 test('matches static and param routes and extracts params', () => {
   const r = new Router();
   const noop = () => {};
-  r.get('/api/assets', noop);
-  r.get('/api/assets/:id', noop);
-  r.get('/api/assets/:id/versions/:vid/download', noop);
+  r.get('/api/files', noop);
+  r.get('/api/files/:id', noop);
+  r.get('/api/files/:id/versions/:vid/download', noop);
 
-  assert.deepEqual(r.match('GET', '/api/assets').params, {});
-  assert.deepEqual(r.match('GET', '/api/assets/42').params, { id: '42' });
-  assert.deepEqual(r.match('GET', '/api/assets/42/versions/7/download').params, {
+  assert.deepEqual(r.match('GET', '/api/files').params, {});
+  assert.deepEqual(r.match('GET', '/api/files/42').params, { id: '42' });
+  assert.deepEqual(r.match('GET', '/api/files/42/versions/7/download').params, {
     id: '42',
     vid: '7',
   });
@@ -19,8 +19,8 @@ test('matches static and param routes and extracts params', () => {
 
 test('trailing slash tolerated; unknown path is null', () => {
   const r = new Router();
-  r.get('/api/assets/:id', () => {});
-  assert.ok(r.match('GET', '/api/assets/1/'));
+  r.get('/api/files/:id', () => {});
+  assert.ok(r.match('GET', '/api/files/1/'));
   assert.equal(r.match('GET', '/nope'), null);
 });
 

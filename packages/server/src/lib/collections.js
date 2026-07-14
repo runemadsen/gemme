@@ -12,7 +12,7 @@ export function getCollection(db, id) {
 
 /**
  * List all collections (flat) with a descendant-inclusive count of distinct
- * non-deleted assets. The client builds the tree from parent_id.
+ * non-deleted files. The client builds the tree from parent_id.
  */
 export function listCollections(db) {
   const rows = db
@@ -21,16 +21,16 @@ export function listCollections(db) {
   const counts = new Map(
     db
       .prepare(
-        `SELECT cc.ancestor AS id, COUNT(DISTINCT ac.asset_id) AS count
+        `SELECT cc.ancestor AS id, COUNT(DISTINCT ac.file_id) AS count
            FROM collection_closure cc
-           JOIN asset_collections ac ON ac.collection_id = cc.descendant
-           JOIN assets a ON a.id = ac.asset_id AND a.deleted_at IS NULL
+           JOIN file_collections ac ON ac.collection_id = cc.descendant
+           JOIN files a ON a.id = ac.file_id AND a.deleted_at IS NULL
           GROUP BY cc.ancestor`
       )
       .all()
       .map((r) => [r.id, r.count])
   );
-  return rows.map((r) => ({ ...r, assetCount: counts.get(r.id) || 0 }));
+  return rows.map((r) => ({ ...r, fileCount: counts.get(r.id) || 0 }));
 }
 
 /** Create a collection under `parentId` (null = root). Maintains the closure. */
@@ -117,7 +117,7 @@ function moveSubtree(db, id, newParentId) {
   }
 }
 
-/** Delete a collection and its whole subtree (assets keep, memberships drop). */
+/** Delete a collection and its whole subtree (files keep, memberships drop). */
 export function deleteCollection(db, id) {
   const info = db.prepare('DELETE FROM collections WHERE id = ?').run(id); // cascades subtree + closure + membership
   if (info.changes === 0) throw new HttpError(404, 'Collection not found');
@@ -125,21 +125,21 @@ export function deleteCollection(db, id) {
 
 // --- membership ------------------------------------------------------------
 
-export function addAssetToCollection(db, assetId, collectionId) {
+export function addFileToCollection(db, fileId, collectionId) {
   if (!getCollection(db, collectionId)) throw new HttpError(404, 'Collection not found');
-  if (!db.prepare('SELECT 1 FROM assets WHERE id = ? AND deleted_at IS NULL').get(assetId))
-    throw new HttpError(404, 'Asset not found');
-  db.prepare('INSERT OR IGNORE INTO asset_collections (asset_id, collection_id) VALUES (?, ?)').run(assetId, collectionId);
+  if (!db.prepare('SELECT 1 FROM files WHERE id = ? AND deleted_at IS NULL').get(fileId))
+    throw new HttpError(404, 'File not found');
+  db.prepare('INSERT OR IGNORE INTO file_collections (file_id, collection_id) VALUES (?, ?)').run(fileId, collectionId);
 }
 
-export function removeAssetFromCollection(db, assetId, collectionId) {
-  db.prepare('DELETE FROM asset_collections WHERE asset_id = ? AND collection_id = ?').run(assetId, collectionId);
+export function removeFileFromCollection(db, fileId, collectionId) {
+  db.prepare('DELETE FROM file_collections WHERE file_id = ? AND collection_id = ?').run(fileId, collectionId);
 }
 
-/** Collection ids an asset belongs to (direct membership). */
-export function getAssetCollectionIds(db, assetId) {
+/** Collection ids an file belongs to (direct membership). */
+export function getFileCollectionIds(db, fileId) {
   return db
-    .prepare('SELECT collection_id FROM asset_collections WHERE asset_id = ? ORDER BY collection_id')
-    .all(assetId)
+    .prepare('SELECT collection_id FROM file_collections WHERE file_id = ? ORDER BY collection_id')
+    .all(fileId)
     .map((r) => r.collection_id);
 }

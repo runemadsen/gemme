@@ -9,12 +9,12 @@ const SORT_COLUMNS = {
 };
 
 /**
- * Search current versions of non-deleted assets with the filter DSL.
+ * Search current versions of non-deleted files with the filter DSL.
  *
  * @returns {{items:object[], total:number, limit:number, offset:number,
  *            sort:string, direction:string, query:string}}
  */
-export function searchAssets(db, query = '', { limit = 50, offset = 0, sort = 'date', direction = 'desc' } = {}) {
+export function searchFiles(db, query = '', { limit = 50, offset = 0, sort = 'date', direction = 'desc' } = {}) {
   const column = SORT_COLUMNS[sort] || SORT_COLUMNS.date;
   const dir = direction === 'asc' ? 'ASC' : 'DESC';
   const { conditions, params } = compileQuery(parseQuery(query));
@@ -25,7 +25,7 @@ export function searchAssets(db, query = '', { limit = 50, offset = 0, sort = 'd
       `SELECT a.id, a.original_filename, a.created_at, a.updated_at,
               v.id AS current_version_id, v.content_hash, v.byte_size,
               v.mime_type, v.extraction_status, v.thumbnail_type
-         FROM assets a
+         FROM files a
          JOIN versions v ON v.id = a.current_version_id
         WHERE ${where}
         ORDER BY ${column} ${dir}, a.id ${dir}
@@ -36,7 +36,7 @@ export function searchAssets(db, query = '', { limit = 50, offset = 0, sort = 'd
   const total = db
     .prepare(
       `SELECT COUNT(*) AS c
-         FROM assets a
+         FROM files a
          JOIN versions v ON v.id = a.current_version_id
         WHERE ${where}`
     )
@@ -54,7 +54,7 @@ export function searchAssets(db, query = '', { limit = 50, offset = 0, sort = 'd
 export function paginatedSearch(db, { query = '', sort, direction, page, perPage } = {}) {
   const c = normalizeControls({ sort, direction, page, perPage });
   const run = (p) =>
-    searchAssets(db, query, { limit: c.perPage, offset: (p - 1) * c.perPage, sort: c.sort, direction: c.direction });
+    searchFiles(db, query, { limit: c.perPage, offset: (p - 1) * c.perPage, sort: c.sort, direction: c.direction });
 
   let result = run(c.page);
   const pages = Math.max(1, Math.ceil(result.total / c.perPage));

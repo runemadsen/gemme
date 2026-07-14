@@ -1,8 +1,8 @@
 {
-  "name": "archive-monorepo",
+  "name": "gemme-monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Self-hosted, search-first archive for files of any type (monorepo)",
+  "description": "Gemme — self-hosted, search-first archive for files of any type (monorepo)",
   "workspaces": [
     "packages/*"
   ],
@@ -11,10 +11,10 @@
   },
   "scripts": {
     "test": "npm test --workspaces --if-present",
-    "archive": "node --no-warnings packages/cli/bin/archive.js",
-    "dev:init": "node --no-warnings packages/cli/bin/archive.js init --data-dir ./dev-instance --no-install",
-    "dev:user": "node --no-warnings packages/cli/bin/archive.js create-user --email dev@example.com --password dev --data-dir ./dev-instance",
-    "dev": "node --no-warnings packages/cli/bin/archive.js start --data-dir ./dev-instance"
+    "gemme": "node --no-warnings packages/cli/bin/gemme.js",
+    "dev:init": "node --no-warnings packages/cli/bin/gemme.js init --data-dir ./dev-instance --no-install",
+    "dev:user": "node --no-warnings packages/cli/bin/gemme.js create-user --email dev@example.com --password dev --data-dir ./dev-instance",
+    "dev": "node --no-warnings packages/cli/bin/gemme.js start --data-dir ./dev-instance --dev"
   },
   "license": "MIT"
 }

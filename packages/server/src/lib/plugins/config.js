@@ -3,10 +3,10 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PluginRegistry } from './registry.js';
 
-export const CONFIG_FILENAME = 'archive.config.js';
+export const CONFIG_FILENAME = 'gemme.config.js';
 
 /**
- * Load an instance's `archive.config.js` and build a PluginRegistry from its
+ * Load an instance's `gemme.config.js` and build a PluginRegistry from its
  * `plugins` array. The config is executable ESM living in the data dir; because
  * we import it by its own file URL, its `import`s for plugin packages resolve
  * against the data dir's node_modules (or, in the monorepo, the workspace
@@ -20,7 +20,7 @@ export async function loadPluginRegistry(dataDir) {
   const configPath = path.join(dataDir, CONFIG_FILENAME);
   if (!fs.existsSync(configPath)) {
     const err = new Error(
-      `No ${CONFIG_FILENAME} found in ${dataDir}. Run \`archive init\` to create an instance.`
+      `No ${CONFIG_FILENAME} found in ${dataDir}. Run \`gemme init\` to create an instance.`
     );
     err.code = 'NO_CONFIG';
     throw err;

@@ -1,6 +1,6 @@
 /**
  * Tiny path router for node:http. Patterns use `:name` segments, e.g.
- * `/api/assets/:id`. Matched params are passed to the handler on `ctx.params`.
+ * `/api/files/:id`. Matched params are passed to the handler on `ctx.params`.
  */
 export class Router {
   constructor() {

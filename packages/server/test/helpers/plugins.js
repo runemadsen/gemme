@@ -11,7 +11,7 @@ function pngSize(buf) {
 /**
  * A registry of inline fake plugins that stand in for the real plugin packages.
  * The server test suite exercises the extraction/merge/search *machinery*, not
- * the real plugins (those are tested in @archive/plugin-text / -image). These
+ * the real plugins (those are tested in @gemme/plugin-text / -image). These
  * fakes mimic just enough behavior for those tests.
  */
 export function fakeRegistry() {

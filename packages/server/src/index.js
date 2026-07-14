@@ -1,4 +1,4 @@
-// Public programmatic entry point for @archive/server.
+// Public programmatic entry point for @gemme/server.
 export { resolveConfig, parseFlags } from './lib/config.js';
 export { openDatabase, openMemoryDatabase } from './lib/db/index.js';
 export { migrate } from './lib/db/migrate.js';
@@ -12,7 +12,7 @@ export { PluginRegistry } from './lib/plugins/registry.js';
 export { loadPluginRegistry, CONFIG_FILENAME } from './lib/plugins/config.js';
 export { ExtractionWorker, runExtraction, runPending, enqueueExtraction } from './worker/index.js';
 export { getVersionMetadata } from './lib/metadata/store.js';
-export { searchAssets, paginatedSearch } from './lib/search/search.js';
+export { searchFiles, paginatedSearch } from './lib/search/search.js';
 export { getFacet, getFacets } from './lib/facets.js';
 export {
   getCollection,
@@ -20,9 +20,9 @@ export {
   createCollection,
   updateCollection,
   deleteCollection,
-  addAssetToCollection,
-  removeAssetFromCollection,
-  getAssetCollectionIds,
+  addFileToCollection,
+  removeFileFromCollection,
+  getFileCollectionIds,
 } from './lib/collections.js';
 export { parseQuery, compileQuery, parseValue, tokenize, QueryError } from './lib/search/dsl.js';
 export {

@@ -27,18 +27,34 @@ test('login page renders and mounts the app script', async () => {
   }
 });
 
-test('home page renders islands and uploaded assets once logged in', async () => {
+test('home page renders islands and uploaded files once logged in', async () => {
   const app = await startTestApp();
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
-    await app.upload('/api/assets', { filename: 'hello.txt', contentType: 'text/plain', body: 'hi' });
+    await app.upload('/api/files', { filename: 'hello.txt', contentType: 'text/plain', body: 'hi' });
 
     const res = await app.get('/');
     assert.equal(res.status, 200);
-    assert.match(res.text, /<archive-uploader>/);
-    assert.match(res.text, /<archive-search/);
+    assert.match(res.text, /<gemme-search/);
     assert.match(res.text, /hello\.txt/);
+    assert.doesNotMatch(res.text, /<gemme-uploader>/, 'uploader moved off the home page');
+  } finally {
+    await app.close();
+  }
+});
+
+test('the uploader lives on its own /upload page (linked in the nav)', async () => {
+  const app = await startTestApp();
+  try {
+    await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
+    await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
+
+    assert.match((await app.get('/')).text, /href="\/upload"/); // nav link
+    const up = await app.get('/upload');
+    assert.equal(up.status, 200);
+    assert.match(up.text, /<gemme-uploader>/);
+    assert.match(up.text, /<a href="\/upload" class="active">Upload<\/a>/);
   } finally {
     await app.close();
   }
@@ -49,9 +65,9 @@ test('home page renders the grid filtered to the URL (shareable filter links)', 
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
-    await app.upload('/api/assets', { filename: 'a.jpg', contentType: 'image/jpeg', body: 'a' });
-    await app.upload('/api/assets', { filename: 'b.png', contentType: 'image/png', body: 'b' });
-    await app.upload('/api/assets', { filename: 'c.txt', contentType: 'text/plain', body: 'c' });
+    await app.upload('/api/files', { filename: 'a.jpg', contentType: 'image/jpeg', body: 'a' });
+    await app.upload('/api/files', { filename: 'b.png', contentType: 'image/png', body: 'b' });
+    await app.upload('/api/files', { filename: 'c.txt', contentType: 'text/plain', body: 'c' });
 
     // Unfiltered: all three present.
     const all = await app.get('/');
@@ -80,8 +96,8 @@ test('typed ?q=ext:jpg renders identically to clicked ?ext=jpg', async () => {
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
-    await app.upload('/api/assets', { filename: 'a.jpg', contentType: 'image/jpeg', body: 'a' });
-    await app.upload('/api/assets', { filename: 'b.png', contentType: 'image/png', body: 'b' });
+    await app.upload('/api/files', { filename: 'a.jpg', contentType: 'image/jpeg', body: 'a' });
+    await app.upload('/api/files', { filename: 'b.png', contentType: 'image/png', body: 'b' });
 
     const typed = await app.get('/?q=' + encodeURIComponent('ext:jpg'));
     const clicked = await app.get('/?ext=jpg');
@@ -100,7 +116,7 @@ test('home page renders sorted per the URL, with controls + pager', async () => 
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
     for (const n of ['banana.txt', 'apple.txt', 'cherry.txt'])
-      await app.upload('/api/assets', { filename: n, contentType: 'text/plain', body: n });
+      await app.upload('/api/files', { filename: n, contentType: 'text/plain', body: n });
 
     const res = await app.get('/?sort=name&direction=asc');
     // names appear in ascending order in the HTML
@@ -119,13 +135,13 @@ test('home page renders sorted per the URL, with controls + pager', async () => 
   }
 });
 
-test('asset detail page shows versions and metadata table', async () => {
+test('file detail page shows versions and metadata table', async () => {
   const app = await startTestApp();
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
-    const up = await app.upload('/api/assets', { filename: 'doc.md', contentType: 'text/markdown', body: 'x' });
-    const res = await app.get(`/assets/${up.json.asset.id}`);
+    const up = await app.upload('/api/files', { filename: 'doc.md', contentType: 'text/markdown', body: 'x' });
+    const res = await app.get(`/files/${up.json.file.id}`);
     assert.equal(res.status, 200);
     assert.match(res.text, /doc\.md/);
     assert.match(res.text, /Versions/);
@@ -140,17 +156,17 @@ test('home has the collections tree; /collections renders the manager; detail ha
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
-    const up = await app.upload('/api/assets', { filename: 'x.txt', contentType: 'text/plain', body: 'x' });
+    const up = await app.upload('/api/files', { filename: 'x.txt', contentType: 'text/plain', body: 'x' });
 
-    assert.match((await app.get('/')).text, /<archive-collections>/);
+    assert.match((await app.get('/')).text, /<gemme-collections>/);
     assert.match((await app.get('/')).text, /href="\/collections"/); // nav link
 
     const mgr = await app.get('/collections');
     assert.equal(mgr.status, 200);
-    assert.match(mgr.text, /<archive-collection-manager>/);
+    assert.match(mgr.text, /<gemme-collection-manager>/);
 
-    const detail = await app.get(`/assets/${up.json.asset.id}`);
-    assert.match(detail.text, /<archive-asset-collections data-asset="/);
+    const detail = await app.get(`/files/${up.json.file.id}`);
+    assert.match(detail.text, /<gemme-file-collections data-file="/);
   } finally {
     await app.close();
   }

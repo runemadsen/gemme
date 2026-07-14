@@ -1,13 +1,13 @@
 {
-  "name": "@archive/cli",
+  "name": "@gemme/cli",
   "version": "0.0.0",
-  "description": "Archive command-line interface",
+  "description": "Gemme command-line interface",
   "type": "module",
   "bin": {
-    "archive": "./bin/archive.js"
+    "gemme": "./bin/gemme.js"
   },
   "dependencies": {
-    "@archive/server": "*"
+    "@gemme/server": "*"
   },
   "scripts": {
     "test": "node --test"

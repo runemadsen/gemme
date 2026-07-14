@@ -3,7 +3,7 @@ import { Router } from './router.js';
 import { sendJson, sendText, HttpError } from './respond.js';
 import { parseCookies, getSessionUser, SESSION_COOKIE } from '../lib/auth/sessions.js';
 import { registerAuthRoutes } from './routes/auth.js';
-import { registerAssetRoutes } from './routes/assets.js';
+import { registerFileRoutes } from './routes/files.js';
 import { registerSearchRoutes } from './routes/search.js';
 import { registerPageRoutes } from './routes/pages.js';
 import { registerEventRoutes } from './routes/events.js';
@@ -21,7 +21,7 @@ export function buildRouter() {
   const router = new Router();
   router.get('/health', (req, res) => sendJson(res, 200, { status: 'ok' }));
   registerAuthRoutes(router);
-  registerAssetRoutes(router);
+  registerFileRoutes(router);
   registerSearchRoutes(router);
   registerPageRoutes(router);
   registerEventRoutes(router);
@@ -39,7 +39,7 @@ export function buildRouter() {
  * @param {string} opts.dataDir
  * @param {boolean} [opts.secure] - set Secure on cookies (behind HTTPS)
  */
-export function createApp({ db, dataDir, secure = false, onVersionCreated, events = createEventBus() }) {
+export function createApp({ db, dataDir, secure = false, dev = false, onVersionCreated, events = createEventBus() }) {
   const router = buildRouter();
   const blobStore = new BlobStore(dataDir);
   const derivedStore = new DerivedStore(dataDir);
@@ -64,6 +64,7 @@ export function createApp({ db, dataDir, secure = false, onVersionCreated, event
         derivedStore,
         events,
         secure,
+        dev,
         params: match.params,
         url,
         user,
@@ -78,12 +79,12 @@ export function createApp({ db, dataDir, secure = false, onVersionCreated, event
 }
 
 /** Create the server and start listening. */
-export function startServer({ db, port, dataDir, secure = false, onVersionCreated, events }) {
-  const server = createApp({ db, dataDir, secure, onVersionCreated, events });
+export function startServer({ db, port, dataDir, secure = false, dev = false, onVersionCreated, events }) {
+  const server = createApp({ db, dataDir, secure, dev, onVersionCreated, events });
   return new Promise((resolve) => {
     server.listen(port, () => {
       const addr = server.address();
-      console.log(`Archive listening on http://localhost:${addr.port}`);
+      console.log(`Gemme listening on http://localhost:${addr.port}`);
       console.log(`Data directory: ${dataDir}`);
       resolve(server);
     });

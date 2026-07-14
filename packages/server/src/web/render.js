@@ -24,20 +24,22 @@ export function fmtSize(bytes) {
   return `${i === 0 ? n : n.toFixed(1)} ${units[i]}`;
 }
 
-function layout({ title, user, body }) {
+function layout({ title, user, body, nav = null }) {
+  const link = (href, label, key) =>
+    `<a href="${href}"${nav === key ? ' class="active"' : ''}>${label}</a>`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} · Archive</title>
+<title>${escapeHtml(title)} · Gemme</title>
 <link rel="stylesheet" href="/static/styles.css">
 <script type="module" src="/static/app.js"></script>
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/">Archive</a>
-  ${user ? `<nav class="nav"><a href="/">Files</a><a href="/collections">Collections</a></nav>` : ''}
+  <a class="brand" href="/"><span class="mark"></span>Gemme</a>
+  ${user ? `<nav class="nav">${link('/', 'Files', 'files')}${link('/upload', 'Upload', 'upload')}${link('/collections', 'Collections', 'collections')}</nav>` : ''}
   ${user ? `<div class="user"><span>${escapeHtml(user.email)}</span><button id="logout">Log out</button></div>` : ''}
 </header>
 <main>${body}</main>
@@ -63,16 +65,16 @@ export function renderLogin({ error } = {}) {
 
 export function renderHome({ user, result, state }) {
   return layout({
-    title: 'Archive',
+    title: 'Gemme',
     user,
+    nav: 'files',
     body: `<div class="layout">
-  <aside class="sidebar"><archive-collections></archive-collections><archive-filters></archive-filters></aside>
+  <aside class="sidebar"><gemme-collections></gemme-collections><gemme-filters></gemme-filters></aside>
   <div class="content">
-    <archive-uploader></archive-uploader>
-    <archive-search placeholder="Search — e.g. type:image width>1920 mountains"></archive-search>
-    <div class="toolbar"><archive-controls>${renderControls(result)}</archive-controls></div>
-    <archive-assets><div id="results" class="grid">${renderGrid(result.items)}</div></archive-assets>
-    <archive-pager data-page="${result.page}" data-pages="${result.pages}">${renderPager(state, result)}</archive-pager>
+    <gemme-search placeholder="Search — e.g. type:image width>1920 mountains"></gemme-search>
+    <div class="toolbar"><gemme-controls>${renderControls(result)}</gemme-controls></div>
+    <gemme-files><div id="results" class="grid">${renderGrid(result.items)}</div></gemme-files>
+    <gemme-pager data-page="${result.page}" data-pages="${result.pages}">${renderPager(state, result)}</gemme-pager>
   </div>
 </div>`,
   });
@@ -156,14 +158,14 @@ export function cardSig(item) {
 }
 
 export function renderCard(item) {
-  return `<a class="card" data-id="${item.id}" data-sig="${escapeHtml(cardSig(item))}" href="/assets/${item.id}">${cardInner(item)}</a>`;
+  return `<a class="card" data-id="${item.id}" data-sig="${escapeHtml(cardSig(item))}" href="/files/${item.id}">${cardInner(item)}</a>`;
 }
 
 // Inner markup of a card, shared shape with public/app.js `cardInner`.
 function cardInner(item) {
   const pending = item.extraction_status === 'pending';
   const thumb = item.thumbnail_type
-    ? `<div class="thumb"><img loading="lazy" src="/api/assets/${item.id}/thumbnail?v=${item.current_version_id}" alt=""></div>`
+    ? `<div class="thumb"><img loading="lazy" src="/api/files/${item.id}/versions/${item.current_version_id}/thumbnail" alt=""></div>`
     : `<div class="thumb"><div class="filetype">${escapeHtml((item.mime_type || 'file').split('/').pop())}</div></div>`;
   return `${thumb}<div class="meta">
     <div class="name" title="${escapeHtml(item.original_filename)}">${escapeHtml(item.original_filename)}</div>
@@ -171,12 +173,13 @@ function cardInner(item) {
   </div>`;
 }
 
-export function renderDetail({ user, asset, metadata }) {
-  const isImage = /^image\//.test(
-    asset.versions.find((v) => v.is_current)?.mime_type || ''
-  );
+export function renderDetail({ user, file, metadata }) {
+  const current = file.versions.find((v) => v.is_current);
+  const isImage = /^image\//.test(current?.mime_type || '');
+  // Version-pinned URL: the full image is served `immutable` in production, and
+  // switches automatically when a new version becomes current.
   const preview = isImage
-    ? `<img src="/api/assets/${asset.id}/download" alt="">`
+    ? `<img src="/api/files/${file.id}/versions/${current.id}/download" alt="">`
     : '';
   const metaRows = metadata.length
     ? metadata
@@ -186,29 +189,44 @@ export function renderDetail({ user, asset, metadata }) {
         )
         .join('')
     : `<tr><td colspan="3" class="empty">No metadata extracted yet.</td></tr>`;
-  const versions = asset.versions
+  const versions = file.versions
     .map(
       (v) => `<li>
-    <a href="/api/assets/${asset.id}/versions/${v.id}/download">v${v.version_no}</a>
-    ${v.is_current ? '<span class="badge">current</span>' : ''}
+    <a href="/api/files/${file.id}/versions/${v.id}/download">v${v.version_no}</a>
+    ${v.is_current ? '<span class="badge current">current</span>' : ''}
     <span class="sub">${escapeHtml(fmtSize(v.byte_size))} · ${escapeHtml(v.mime_type || '')} · ${escapeHtml(v.created_at)}</span>
   </li>`
     )
     .join('');
 
   return layout({
-    title: asset.original_filename,
+    title: file.original_filename,
     user,
+    nav: 'files',
     body: `<section class="detail">
   <p><a href="/">← Back</a></p>
-  <h1>${escapeHtml(asset.original_filename)}</h1>
+  <h1>${escapeHtml(file.original_filename)}</h1>
   <div class="preview">${preview}</div>
   <h2>Versions</h2>
   <ul class="versions">${versions}</ul>
   <h2>Metadata</h2>
   <table class="metadata"><thead><tr><th>Key</th><th>Value</th><th>Source</th></tr></thead><tbody>${metaRows}</tbody></table>
   <h2>Collections</h2>
-  <archive-asset-collections data-asset="${asset.id}"></archive-asset-collections>
+  <gemme-file-collections data-file="${file.id}"></gemme-file-collections>
+</section>`,
+  });
+}
+
+export function renderUploadPage({ user }) {
+  return layout({
+    title: 'Upload',
+    user,
+    nav: 'upload',
+    body: `<section class="detail">
+  <h1>Upload</h1>
+  <p class="sub">Drop files to add them to the archive. Exact duplicates (same name and contents) are skipped.</p>
+  <gemme-uploader></gemme-uploader>
+  <p style="margin-top:18px"><a href="/">View files →</a></p>
 </section>`,
   });
 }
@@ -217,10 +235,11 @@ export function renderCollectionsPage({ user }) {
   return layout({
     title: 'Collections',
     user,
+    nav: 'collections',
     body: `<section class="detail">
   <h1>Collections</h1>
-  <p class="sub">Group assets into a nestable tree. Deleting a collection removes its sub-collections too; assets are never deleted.</p>
-  <archive-collection-manager></archive-collection-manager>
+  <p class="sub">Group files into a nestable tree. Deleting a collection removes its sub-collections too; files are never deleted.</p>
+  <gemme-collection-manager></gemme-collection-manager>
 </section>`,
   });
 }

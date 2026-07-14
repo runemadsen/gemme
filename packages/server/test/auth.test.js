@@ -71,7 +71,7 @@ test('expired sessions do not resolve', async () => {
 test('cookie parse and serialize round-trip', () => {
   assert.deepEqual(parseCookies('a=1; b=two'), { a: '1', b: 'two' });
   const cookie = serializeSessionCookie('tok123');
-  assert.match(cookie, /archive_session=tok123/);
+  assert.match(cookie, /gemme_session=tok123/);
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Lax/);
 });

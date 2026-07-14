@@ -18,22 +18,22 @@ test('collections CRUD + membership over HTTP', async () => {
     const b = (await app.post('/api/collections', { name: 'B', parentId: a.id })).json.collection;
     assert.equal(b.parent_id, a.id);
 
-    // Upload an asset and add it to B.
-    const asset = (await app.upload('/api/assets', { filename: 'x.txt', contentType: 'text/plain', body: 'x' })).json.asset;
-    assert.equal((await app.post(`/api/assets/${asset.id}/collections`, { collectionId: b.id })).status, 200);
-    assert.deepEqual((await app.get(`/api/assets/${asset.id}/collections`)).json.collectionIds, [b.id]);
+    // Upload an file and add it to B.
+    const file = (await app.upload('/api/files', { filename: 'x.txt', contentType: 'text/plain', body: 'x' })).json.file;
+    assert.equal((await app.post(`/api/files/${file.id}/collections`, { collectionId: b.id })).status, 200);
+    assert.deepEqual((await app.get(`/api/files/${file.id}/collections`)).json.collectionIds, [b.id]);
 
-    // List shows descendant-inclusive counts (A counts B's asset).
+    // List shows descendant-inclusive counts (A counts B's file).
     const list = (await app.get('/api/collections')).json.collections;
-    const byId = Object.fromEntries(list.map((c) => [c.id, c.assetCount]));
+    const byId = Object.fromEntries(list.map((c) => [c.id, c.fileCount]));
     assert.equal(byId[a.id], 1);
     assert.equal(byId[b.id], 1);
 
-    // Filtering by A's name (descendant-inclusive) finds the asset in B.
+    // Filtering by A's name (descendant-inclusive) finds the file in B.
     assert.equal((await app.get('/api/search?q=' + encodeURIComponent('collection=A'))).json.total, 1);
 
     // Remove membership -> filter empty.
-    await app.del(`/api/assets/${asset.id}/collections/${b.id}`);
+    await app.del(`/api/files/${file.id}/collections/${b.id}`);
     assert.equal((await app.get('/api/search?q=' + encodeURIComponent('collection=A'))).json.total, 0);
   } finally {
     await app.close();

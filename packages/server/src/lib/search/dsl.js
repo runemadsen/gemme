@@ -126,16 +126,16 @@ function compileTextTerm({ term, negate }) {
 }
 
 function compileClause({ key, op, values, negate }) {
-  // `collection` is not EAV metadata — it matches assets in any collection with
+  // `collection` is not EAV metadata — it matches files in any collection with
   // one of the given NAMES, or in any descendant of such a collection (via the
   // closure table). Duplicate names naturally union.
   if (key === 'collection') {
     const names = values.map((v) => v.text);
     const placeholders = names.map(() => '?').join(', ');
-    const exists = `EXISTS (SELECT 1 FROM asset_collections ac
+    const exists = `EXISTS (SELECT 1 FROM file_collections ac
         JOIN collection_closure cc ON cc.descendant = ac.collection_id
         JOIN collections anc ON anc.id = cc.ancestor
-       WHERE ac.asset_id = a.id AND anc.name IN (${placeholders}))`;
+       WHERE ac.file_id = a.id AND anc.name IN (${placeholders}))`;
     return { sql: negate ? `NOT ${exists}` : exists, params: names };
   }
 

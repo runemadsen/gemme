@@ -5,9 +5,16 @@ import { sendHtml, redirect, HttpError } from '../respond.js';
 import { paginatedSearch } from '../../lib/search/search.js';
 import { resolveState, composeQuery } from '../../lib/search/compose.js';
 import { QueryError } from '../../lib/search/dsl.js';
-import { getAsset } from '../../lib/assets.js';
+import { getFile } from '../../lib/files.js';
 import { getVersionMetadata } from '../../lib/metadata/store.js';
-import { renderHome, renderLogin, renderDetail, renderNotFound, renderCollectionsPage } from '../../web/render.js';
+import {
+  renderHome,
+  renderLogin,
+  renderDetail,
+  renderNotFound,
+  renderCollectionsPage,
+  renderUploadPage,
+} from '../../web/render.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../web/public/', import.meta.url));
 const CONTENT_TYPES = {
@@ -38,23 +45,28 @@ export function registerPageRoutes(router) {
     sendHtml(res, 200, renderHome({ user: ctx.user, result, state }));
   });
 
+  router.get('/upload', (req, res, ctx) => {
+    if (!ctx.user) return redirect(res, '/login');
+    sendHtml(res, 200, renderUploadPage({ user: ctx.user }));
+  });
+
   router.get('/collections', (req, res, ctx) => {
     if (!ctx.user) return redirect(res, '/login');
     sendHtml(res, 200, renderCollectionsPage({ user: ctx.user }));
   });
 
-  router.get('/assets/:id', (req, res, ctx) => {
+  router.get('/files/:id', (req, res, ctx) => {
     if (!ctx.user) return redirect(res, '/login');
     const id = Number(ctx.params.id);
-    const asset = Number.isInteger(id) ? getAsset(ctx.db, id) : null;
-    if (!asset) return sendHtml(res, 404, renderNotFound({ user: ctx.user }));
-    const metadata = asset.current_version_id
-      ? getVersionMetadata(ctx.db, asset.current_version_id)
+    const file = Number.isInteger(id) ? getFile(ctx.db, id) : null;
+    if (!file) return sendHtml(res, 404, renderNotFound({ user: ctx.user }));
+    const metadata = file.current_version_id
+      ? getVersionMetadata(ctx.db, file.current_version_id)
       : [];
-    sendHtml(res, 200, renderDetail({ user: ctx.user, asset, metadata }));
+    sendHtml(res, 200, renderDetail({ user: ctx.user, file, metadata }));
   });
 
-  // Static assets (flat directory, basename only — no traversal).
+  // Static files (flat directory, basename only — no traversal).
   router.get('/static/:file', (req, res, ctx) => {
     const name = path.basename(ctx.params.file);
     const file = path.join(PUBLIC_DIR, name);

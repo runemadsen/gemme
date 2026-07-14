@@ -4,7 +4,7 @@ const HEARTBEAT_MS = 25000;
 
 /**
  * Server-Sent Events stream. The browser opens one EventSource here and gets a
- * `change` event whenever the asset list may have changed (upload, extraction
+ * `change` event whenever the file list may have changed (upload, extraction
  * finished, delete). Plain text/event-stream over node:http — no dependencies.
  */
 export function registerEventRoutes(router) {

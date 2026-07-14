@@ -37,6 +37,11 @@ export class DerivedStore {
     return fs.existsSync(this.thumbPath(hash, contentType));
   }
 
+  /** fs.Stats for a thumbnail (size + mtime feed a cache validator). */
+  statThumb(hash, contentType) {
+    return fs.statSync(this.thumbPath(hash, contentType));
+  }
+
   async putThumb(hash, contentType, buffer) {
     const dest = this.thumbPath(hash, contentType);
     await fsp.mkdir(path.dirname(dest), { recursive: true });

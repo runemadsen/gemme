@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runCli, resolveCreateUserInputs } from '../src/cli.js';
-import { openDatabase, getUserByEmail } from '@archive/server';
+import { openDatabase, getUserByEmail } from '@gemme/server';
 
 test('help command prints usage', async () => {
   const chunks = [];
@@ -23,19 +23,19 @@ test('unknown command rejects', async () => {
 });
 
 test('init scaffolds a runnable project (package.json scripts + deps + config)', async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-init-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-init-'));
   try {
     await runCli(['init', '--data-dir', dir, '--no-install']);
 
     const pkg = JSON.parse(await fsp.readFile(path.join(dir, 'package.json'), 'utf8'));
-    assert.equal(pkg.scripts.start, 'archive start --data-dir .');
-    assert.equal(pkg.scripts['create-user'], 'archive create-user --data-dir .');
-    assert.ok(pkg.dependencies['@archive/cli'], 'depends on the CLI so `archive` is a local bin');
-    assert.ok(pkg.dependencies['@archive/plugin-text']);
-    assert.ok(pkg.dependencies['@archive/plugin-image']);
+    assert.equal(pkg.scripts.start, 'gemme start --data-dir .');
+    assert.equal(pkg.scripts['create-user'], 'gemme create-user --data-dir .');
+    assert.ok(pkg.dependencies['@gemme/cli'], 'depends on the CLI so `gemme` is a local bin');
+    assert.ok(pkg.dependencies['@gemme/plugin-text']);
+    assert.ok(pkg.dependencies['@gemme/plugin-image']);
 
-    const config = await fsp.readFile(path.join(dir, 'archive.config.js'), 'utf8');
-    assert.match(config, /@archive\/plugin-text/);
+    const config = await fsp.readFile(path.join(dir, 'gemme.config.js'), 'utf8');
+    assert.match(config, /@gemme\/plugin-text/);
     assert.match(config, /export default/);
   } finally {
     await fsp.rm(dir, { recursive: true, force: true });
@@ -43,7 +43,7 @@ test('init scaffolds a runnable project (package.json scripts + deps + config)',
 });
 
 test('create-user with flags creates a user (non-interactive)', async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-cli-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-cli-'));
   try {
     await runCli(['create-user', '--email', 'x@y.com', '--password', 'pw123456', '--data-dir', dir]);
     const db = openDatabase({ dataDir: dir });
@@ -100,7 +100,7 @@ test('non-interactive with no flags does not prompt (returns empty)', async () =
 });
 
 test('create-user without password rejects clearly (non-interactive)', async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'archive-cli-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-cli-'));
   try {
     await assert.rejects(
       () => runCli(['create-user', '--email', 'x@y.com', '--data-dir', dir]),

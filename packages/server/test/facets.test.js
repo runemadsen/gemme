@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemoryDatabase } from '../src/lib/db/index.js';
-import { createAssetWithVersion, softDeleteAsset } from '../src/lib/assets.js';
+import { createFileWithVersion, softDeleteFile } from '../src/lib/files.js';
 import { getFacet, getFacets } from '../src/lib/facets.js';
-import { searchAssets } from '../src/lib/search/search.js';
+import { searchFiles } from '../src/lib/search/search.js';
 
 function seedUser(db) {
   return db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
 }
 const add = (db, userId, filename, mimeType) =>
-  createAssetWithVersion(db, { filename, mimeType, hash: filename, size: 1, userId });
+  createFileWithVersion(db, { filename, mimeType, hash: filename, size: 1, userId });
 
 test('getFacet returns distinct values with counts (whole archive, current versions)', () => {
   const db = openMemoryDatabase();
@@ -32,12 +32,12 @@ test('getFacet returns distinct values with counts (whole archive, current versi
   db.close();
 });
 
-test('facets exclude soft-deleted assets', () => {
+test('facets exclude soft-deleted files', () => {
   const db = openMemoryDatabase();
   const userId = seedUser(db);
   const a = add(db, userId, 'a.jpg', 'image/jpeg');
   add(db, userId, 'b.png', 'image/png');
-  softDeleteAsset(db, a.id);
+  softDeleteFile(db, a.id);
 
   const ext = getFacet(db, 'ext');
   assert.deepEqual(ext.map((f) => f.value), ['png']);
@@ -61,8 +61,8 @@ test('selecting facet values filters via ext=jpg,png (OR within facet)', () => {
   add(db, userId, 'c.gif', 'image/gif');
 
   const names = (r) => r.items.map((i) => i.original_filename).sort();
-  assert.deepEqual(names(searchAssets(db, 'ext=jpg,png')), ['a.jpg', 'b.png']);
+  assert.deepEqual(names(searchFiles(db, 'ext=jpg,png')), ['a.jpg', 'b.png']);
   // combined with another facet (AND across facets)
-  assert.deepEqual(names(searchAssets(db, 'ext=jpg,png type=image')), ['a.jpg', 'b.png']);
+  assert.deepEqual(names(searchFiles(db, 'ext=jpg,png type=image')), ['a.jpg', 'b.png']);
   db.close();
 });

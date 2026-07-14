@@ -1,4 +1,4 @@
-# Archive application
+# Gemme
 
 This is a project to build a web-based application for people or organizations
 who need to create an annotated archive of files (including images and text)
@@ -22,45 +22,54 @@ Here's a list of the key principles
 - Speed matters. Fast snappy interface with amazing search
 
 Every file is private by default, but you can share them publically either from
-a single asset or from a collection of assets.
+a single file or from a collection of files.
 
-The UI for adding (in bulk), tagging, and querying these assets should be simple
+The UI for adding (in bulk), tagging, and querying these files should be simple
 and powerful.
 
 ## Decisions log
 
 Decisions made while working through the concept. Keep this updated as we go.
 
-### Assets & versioning (decided)
+### Files & versioning (decided)
 
-- **Asset vs. version.** An asset is a stable ID pointing at an ordered list of
+- **File vs. version.** A file is a stable ID pointing at an ordered list of
   versions. Uploading again never overwrites bytes — it appends a new version.
 - **Current = newest.** The current version is always the most recent upload. No
   rollback / pinning for now.
 - **Retention.** Old versions are kept by default and only removed when
-  explicitly deleted. Most assets stay single-version (e.g. photos); some
+  explicitly deleted. Most files stay single-version (e.g. photos); some
   accumulate many (e.g. drafts).
-- **New versions are explicit.** Dragging in files always creates *new assets*.
+- **New versions are explicit.** Dragging in files always creates *new files*.
   Adding a version is a deliberate "upload new version of this" action. Many
-  assets with the same filename may coexist — filename is a label, not identity.
+  files with the same filename may coexist — filename is a label, not identity.
 - **Content-addressed storage.** Version bytes are stored under their content
   hash, so identical re-uploads dedup for free.
+- **Upload dedup (skip identical).** `POST /api/files` skips creating a new
+  file when a non-deleted file already has the **same filename AND same
+  current-version content hash** (`findDuplicateFile`); it responds `200
+  { file, skipped: true }` instead of `201`. Same name + different content, or
+  different name + same content, still import. Since the client uploads one
+  request per file, a bulk drop of N imports only the non-duplicates.
+  Likewise, `POST /api/files/:id/versions` **skips** when the upload is
+  byte-identical to the file's current version (also `200 { skipped: true }`),
+  so re-adding the same bytes never creates a redundant version.
 
 ### Metadata (decided)
 
 - **Extracted metadata lives on the version** — it is intrinsic to the bytes
-  (EXIF, dimensions, PDF page count, extracted text). The asset surfaces the
+  (EXIF, dimensions, PDF page count, extracted text). The file surfaces the
   current version's extracted metadata.
-- **User metadata lives on the asset** — it survives across versions and is
+- **User metadata lives on the file** — it survives across versions and is
   never clobbered by a re-upload.
 - **Extraction is plugin-based per filetype** and must be expandable. Core ships
   plugins (e.g. image/EXIF, PDF), and users can add more file plugins later.
-- **Provenance.** Each asset/version records which user performed the action.
+- **Provenance.** Each file/version records which user performed the action.
 
 ### Users (decided)
 
 - **Multiple users from day one.** No fine-grained permissions yet: every user
-  can access everything. Assets track the acting user for provenance.
+  can access everything. Files track the acting user for provenance.
 
 ### Sharing (decided)
 
@@ -81,8 +90,8 @@ Decisions made while working through the concept. Keep this updated as we go.
   Multipart upload parsing is isolated behind one module (may use a focused dep
   like `busboy`, easily swapped).
 - **Frontend:** pure vanilla Web Components, no framework, no build step. Server
-  renders complete HTML; ~2 interactive "islands" (`<archive-uploader>`,
-  `<archive-search>`) are native custom elements loaded as ES modules. The page is
+  renders complete HTML; ~2 interactive "islands" (`<gemme-uploader>`,
+  `<gemme-search>`) are native custom elements loaded as ES modules. The page is
   useful with zero JS — same "nothing is broken with just a file" philosophy.
 - **API-first:** a JSON HTTP API holds all functionality; the frontend is a client
   of it. Everything runs in one process on one box.
@@ -90,9 +99,9 @@ Decisions made while working through the concept. Keep this updated as we go.
   designed around typed filtering (`width=1080`, `duration>10s`) plus FTS5 full
   text. Extracted metadata stored as typed EAV (`version_metadata`) with a `source`
   column per plugin; keys are multi-valued.
-- **Distribution:** `npx @archive/cli init` scaffolds a project (no global
+- **Distribution:** `npx @gemme/cli init` scaffolds a project (no global
   install). Each instance is a small npm project whose `package.json` lists
-  `@archive/cli` + plugins as deps and has `start`/`create-user` scripts; you run
+  `@gemme/cli` + plugins as deps and has `start`/`create-user` scripts; you run
   it with `npm run start`. DB migrations run automatically on startup.
 
 ### Plugin interface (decided)
@@ -118,13 +127,13 @@ Decisions made while working through the concept. Keep this updated as we go.
 
 Full design lives in the plan file referenced below; summary:
 
-- **Storage:** single `--data-dir` holds `archive.db`, content-addressed `blobs/`
+- **Storage:** single `--data-dir` holds `gemme.db`, content-addressed `blobs/`
   (sharded by hash prefix, dedup by SHA-256), and `derived/` thumbnails.
-- **Data model:** `users`, `assets` (→ current_version_id, soft delete),
+- **Data model:** `users`, `files` (→ current_version_id, soft delete),
   `versions` (content_hash, mime_type, extraction_status, thumbnail_type, and
-  **version_no** — a per-asset 1,2,3… number for display, distinct from the
+  **version_no** — a per-file 1,2,3… number for display, distinct from the
   global `id`), `version_metadata` (typed EAV + source), `metadata_fts` (FTS5),
-  `jobs` (durable queue), `migrations`.
+  `jobs` (durable queue), `schema_migrations`.
 - **Background worker:** on upload the version's **core metadata (filename, ext,
   type, mime, size, created) + a filename FTS row are indexed synchronously**
   (`indexVersionCore`, inside the create transaction) so it's *searchable
@@ -138,7 +147,7 @@ Full design lives in the plan file referenced below; summary:
 ### Upload wire format (decided during build)
 
 Rather than pull in a multipart parser, uploads are **one file per request as a
-raw body**: `POST /api/assets` (new asset) or `POST /api/assets/:id/versions`
+raw body**: `POST /api/files` (new file) or `POST /api/files/:id/versions`
 (new version) with the bytes as the request body, `X-Filename` (URL-encoded) and
 `Content-Type` headers carrying the rest. Streams straight into the blob store.
 Bulk upload = many parallel requests. Isolated in `src/server/upload.js` so it can
@@ -152,21 +161,21 @@ Tests use Node's built-in `node:test` + `assert` (zero deps); HTTP tested via
 
 1. [DONE] Skeleton + storage core (CLI, config, DB module, migration runner, blob store).
 2. [DONE] Users + auth (create-user, login/session, HTTP router + middleware).
-3. [DONE] Assets & versioning API (upload, add version, list, get, delete, download, provenance).
+3. [DONE] Files & versioning API (upload, add version, list, get, delete, download, provenance).
 4. [DONE] Background worker + plugin system (multi-plugin merge, source tags, per-plugin
    failure isolation, re-runnable). Zero-dep core plugins: `text` (full text + counts)
    and `image` (dimensions via header parsing). EXIF/PDF/thumbnails/AI are future opt-in
    plugins that bring their own deps.
 5. [DONE] Search / filter DSL (EAV + FTS5, parser, SQL compiler, `GET /api/search`).
-6. [DONE] Frontend — server-rendered pages (login, asset grid, asset detail) served
-   from `node:http`, plus two vanilla Web Component islands (`<archive-uploader>`
-   drag-drop upload with progress, `<archive-search>` debounced DSL search) in
+6. [DONE] Frontend — server-rendered pages (login, file grid, file detail) served
+   from `node:http`, plus two vanilla Web Component islands (`<gemme-uploader>`
+   drag-drop upload with progress, `<gemme-search>` debounced DSL search) in
    `src/web/public/app.js`. No framework, no build step. Static files served from
    `/static/:file`. Files: `src/web/render.js`, `src/web/public/{app.js,styles.css}`,
    `src/server/routes/pages.js`.
 
 **v1 complete.** All six milestones built TDD, then restructured into an npm-workspaces
-monorepo with a config-driven plugin system (see below). 138 tests green (`npm test`). Verified
+monorepo with a config-driven plugin system (see below). 142 tests green (`npm test`). Verified
 end-to-end against a live server: create-user → login → drag/upload → background
 extraction → DSL search → versioning → download → detail pages.
 
@@ -186,7 +195,7 @@ Query = whitespace-separated terms; any term negatable with leading `-`.
   what the filter sidebar emits; across fields clauses still AND.
 - **Free text:** bare or `"quoted"` words → matched against FTS5 (filename tokens
   + extracted body) OR as a filename substring. Multiple terms AND; negatives exclude.
-- Searches **current versions of non-deleted assets**. Empty query = list all.
+- Searches **current versions of non-deleted files**. Empty query = list all.
 - Compiles to `EXISTS (… version_metadata …)` per clause + FTS subqueries.
   Files: `src/search/dsl.js` (parse/compile), `src/search/search.js` (execute).
   Examples: `mountains type:image width>1920 -type:pdf created>2024-01-01`.
@@ -196,69 +205,102 @@ Detailed plan: `~/.claude/plans/yes-the-metadata-extraction-synthetic-parasol.md
 ## Monorepo & plugin architecture (as built)
 
 npm **workspaces** (no turborepo). One root `npm install` symlinks the packages.
-**138 tests green** across the workspaces (`npm test`).
+**142 tests green** across the workspaces (`npm test`).
 
 ```
 packages/
-  plugin-api/    @archive/plugin-api    tiny contract: definePlugin(), apiVersion
-  server/        @archive/server        core: db, storage, auth, assets, search,
+  plugin-api/    @gemme/plugin-api    tiny contract: definePlugin(), apiVersion
+  server/        @gemme/server        core: db, storage, auth, files, search,
                                         worker, HTTP API, plugin loader
-  cli/           @archive/cli           the `archive` bin (init/start/migrate/
+  cli/           @gemme/cli           the `gemme` bin (init/start/migrate/
                                         create-user/plugins add) → depends on server
-  plugin-text/   @archive/plugin-text   full text + counts (zero-dep)
-  plugin-image/  @archive/plugin-image  dimensions (header parse) + EXIF (exifr)
+  plugin-text/   @gemme/plugin-text   full text + counts (zero-dep)
+  plugin-image/  @gemme/plugin-image  dimensions (header parse) + EXIF (exifr)
                                         + WebP thumbnails (sharp)
 ```
 
 - **Plugins are packages, not bundled in core.** Each plugin default-exports a
-  *factory* taking options, and depends only on `@archive/plugin-api`. `server`
+  *factory* taking options, and depends only on `@gemme/plugin-api`. `server`
   ships zero plugin deps. `server` checks each plugin's `apiVersion` on load.
-- **Each instance is a small npm project** (the npx flow: `mkdir my-archive &&
-  cd my-archive && npx @archive/cli init`). `init` defaults the data dir to the
-  current directory and scaffolds `package.json` (deps: `@archive/cli` + default
+- **Each instance is a small npm project** (the npx flow: `mkdir my-gemme &&
+  cd my-gemme && npx @gemme/cli init`). `init` defaults the data dir to the
+  current directory and scaffolds `package.json` (deps: `@gemme/cli` + default
   plugins text/image; scripts: `start`, `create-user` → both `--data-dir .`),
-  `archive.config.js`, then runs `npm install` — so the `archive` bin lands in
-  local `node_modules/.bin`. You run it with `npm run start`. `archive plugins add
-  <pkg>` installs + edits the config. `archive start` loads the config → builds
-  the `PluginRegistry` → the worker uses it. Missing config → clear "run `archive
+  `gemme.config.js`, then runs `npm install` — so the `gemme` bin lands in
+  local `node_modules/.bin`. You run it with `npm run start`. `gemme plugins add
+  <pkg>` installs + edits the config. `gemme start` loads the config → builds
+  the `PluginRegistry` → the worker uses it. Missing config → clear "run `gemme
   init`" error. (Interactive `create-user` prompts need a real TTY — through
   `npm run` you pass `--email`/`--password`; the both-TTY guard in
   `cli/src/prompt.js` prevents silently buffered prompts.)
-- **Thumbnails.** Every asset *can* have a thumbnail; none is fine (UI shows a
+- **Thumbnails.** Every file *can* have a thumbnail; none is fine (UI shows a
   gray rectangle — "just the file" still works). Thumbnails are **per-version**
   (they change with the bytes) and stored in a content-addressed **derived store**
   (`server/src/storage/derived.js`, `<dataDir>/derived/<hash>.thumb.<ext>`); the
-  version records `thumbnail_type` (migration 004). Plugins run **in registry
+  version records `thumbnail_type` (in the core schema, migration 001). Plugins run **in registry
   order** and each `extract()` receives `thumbnailTarget` ({maxEdge:512,
   format:'webp'}, core-provided) and `prior` (accumulated metadata + whether a
   thumbnail already exists). **First plugin to return one wins**; later plugins
   see `prior.thumbnail === true` and skip. Only `plugin-image` makes them today
-  (via `sharp`, auto-oriented). Served at `GET /api/assets/:id/thumbnail`
+  (via `sharp`, auto-oriented). Served at `GET /api/files/:id/thumbnail`
   (cache-busted per version); list/search expose `thumbnail_type`. Grid uses
   thumbnail-or-gray (no full-image fallback).
+  - **Image cache policy (thumbnails + downloads).** The UI references
+    **version-pinned** URLs for cached display — the grid thumbnail is
+    `/api/files/:id/versions/:vid/thumbnail` and the detail photo is
+    `/api/files/:id/versions/:vid/download` (both carry the current version id).
+    These are served **`immutable`** (1-year, no revalidation) in production,
+    because a version is written exactly once — created, extracted, thumbnailed —
+    and **never regenerated**, so the version id fully identifies the bytes. When
+    a new version becomes current the URL changes, so the cache busts naturally.
+    The bare "latest" pointers (`/api/files/:id/thumbnail`, `.../download`) track
+    a moving target and are therefore **always `no-cache` + strong `ETag`**
+    (honoring `If-None-Match` → 304); they're for sharing/API, not cached display.
+    The one thing that can break the immutable promise is **re-running extraction
+    locally** (a plugin/`sharp` change rewrites a thumbnail for the same version),
+    so **dev mode never sends `immutable`** — a `dev` config flag (`--dev` /
+    `GEMME_DEV`, threaded to `ctx.dev`; the repo's `npm run dev` sets it) forces
+    `no-cache` on the pinned routes too. This was the "grid shows the wrong
+    thumbnail while the detail page is right, fixed by a hard refresh" bug: the old
+    code marked thumbnails `immutable` and got poisoned by dev re-extraction.
+    Files: `server/routes/files.js` (`cacheControl`, `pinned` flag),
+    `lib/config.js` (`dev`), `server/index.js` (`ctx.dev`),
+    `web/render.js` + `web/public/app.js` (version-pinned URLs);
+    tests: `server/test/thumbnail.test.js`.
 - **Config loader:** `server/src/plugins/config.js` `loadPluginRegistry(dataDir)`
-  dynamic-imports `<dataDir>/archive.config.js` by file URL, so its plugin imports
+  dynamic-imports `<dataDir>/gemme.config.js` by file URL, so its plugin imports
   resolve against the instance's own `node_modules`.
 - **Collections (nestable, done):** unlimited-depth tree (`collections.parent_id`)
-  with a **closure table** (`collection_closure`) so "all assets in a collection
+  with a **closure table** (`collection_closure`) so "all files in a collection
   incl. descendants" is one flat indexed query regardless of depth.
-  `asset_collections` is the many-to-many membership. **Filtering is by NAME**: the
+  `file_collections` is the many-to-many membership. **Filtering is by NAME**: the
   `collection` filter key (a `FILTER_KEY`, not an EAV facet) compiles to a
   closure+name `EXISTS` — so duplicate names union their subtrees, and selecting a
   name is descendant-inclusive. It rides the same query/URL/search-bar system
   (`collection=Trips,Docs`, `?collection=…`). CRUD + membership API
-  (`/api/collections`, `/api/assets/:id/collections`); the sidebar
-  `<archive-collections>` tree (multi-select by name → `store.filters.collection`),
-  a `/collections` manager page, and membership checkboxes (by id) on the asset
-  detail page. Delete cascades the subtree (assets untouched). Files:
-  `collections/collections.js`, `server/routes/collections.js`, migration 006.
-  Deferred: collection-based sharing, and bulk "add uploads to a collection".
+  (`/api/collections`, `/api/files/:id/collections`); the sidebar
+  `<gemme-collections>` tree (multi-select by name → `store.filters.collection`),
+  a `/collections` manager page, and membership checkboxes (by id) on the file
+  detail page. Delete cascades the subtree (files untouched). Files:
+  `collections/collections.js`, `server/routes/collections.js`, migration 004.
+  Deferred: collection-based sharing.
+- **Assign uploads to collections (done):** the upload page's `<gemme-uploader>`
+  now renders a collection tree beneath the file list. After a drop, the just-
+  uploaded files form a **batch** (their ids, including skipped duplicates so a
+  re-dropped file can still be filed); ticking a collection files (or unfiles)
+  every file in the batch via the existing `POST/DELETE
+  /api/files/:id/collections` membership API (one request per file, by id, like
+  the detail page). Each new drop starts a **fresh round** (a bumped `round`
+  counter; stale in-flight uploads bail on mismatch) that resets the file list,
+  the batch, and the collection selection — so uploading over many rounds always
+  assigns to just the most recent batch. The tree is hidden until ≥1 file lands.
+  Frontend-only (no server change); `<gemme-uploader>` in `web/public/app.js`.
 - **Filters (faceted, extensible):** `GET /api/facets?keys=ext,type` returns, per
   metadata key, the distinct text values in the archive with counts (a GROUP BY
   over the EAV table — works for ANY key with no per-filter backend code). The
-  `<archive-filters>` sidebar renders a section per facet (config `FACETS` in
+  `<gemme-filters>` sidebar renders a section per facet (config `FACETS` in
   `web/public/app.js` — add a key to add a filter) and broadcasts selected values
-  as `archive:filters`. `<archive-assets>` composes `search text + filters` into
+  as `gemme:filters`. `<gemme-files>` composes `search text + filters` into
   one DSL query (filters become `key=v1,v2`), so filtering reuses the whole search
   + live-reconcile pipeline. Facet counts are whole-archive (not query-scoped) for
   now. Files: `facets/facets.js`, `server/routes/facets.js`.
@@ -274,12 +316,12 @@ packages/
   `composeQuery`, `stateToUrl`, `FACET_KEYS`), mirrored in `app.js`.
 - **Sorting + pagination:** the state also carries `sort` (`date`|`name`),
   `direction` (`asc`|`desc`), `page`, `perPage` — reserved URL params (not facet
-  keys), normalized/whitelisted in `compose.js`. `searchAssets` takes
+  keys), normalized/whitelisted in `compose.js`. `searchFiles` takes
   `sort`/`direction` (whitelisted → SQL column, no injection); `paginatedSearch`
   slices by page and clamps an out-of-range page to the last. `GET /api/search`
   returns `{ items, total, page, perPage, pages, sort, direction }`; `GET /`
   renders the first page sorted, with server-rendered controls + pager. Frontend:
-  `<archive-controls>` (sort/order/per-page selects) and `<archive-pager>`
+  `<gemme-controls>` (sort/order/per-page selects) and `<gemme-pager>`
   (numbered links + Prev/Next); changing search/filters/sort/perPage resets to
   page 1, page nav keeps everything else. All flow through the store → grid
   reconciles in place, no reload.
@@ -289,19 +331,19 @@ packages/
   client hydrates bar + checkboxes and rewrites the URL (`history.replaceState`)
   on every change. `?q=ext:jpg` and `?ext=jpg` resolve identically. Paste a URL →
   same filtered view.
-- **Live updates (no refresh):** the asset grid is a pure function of
-  `query -> items`. The client (`<archive-assets>`) re-runs its current query and
-  **reconciles cards by asset id** (updating only those whose signature —
+- **Live updates (no refresh):** the file grid is a pure function of
+  `query -> items`. The client (`<gemme-files>`) re-runs its current query and
+  **reconciles cards by file id** (updating only those whose signature —
   thumbnail/version/status/size/name — changed, so unchanged thumbnails don't
   reload). Two triggers funnel into one `refresh()`: query changes
-  (`<archive-search>` → `archive:query`) and data changes pushed over **SSE**
+  (`<gemme-search>` → `gemme:query`) and data changes pushed over **SSE**
   (`GET /api/events`, plain `text/event-stream` on node:http). Write routes and
   the extraction worker emit `change` on a shared in-process bus
   (`events/bus.js`); the SSE route forwards to browsers; the client coalesces
   bursts. So a `pending` card gains its thumbnail the moment extraction finishes.
 - **Local dev needs no per-instance install:** `npm run dev:init` creates
   `./dev-instance` (inside the repo) with `--no-install`; its config imports the
-  `@archive/plugin-*` packages by name, which resolve through the workspace
+  `@gemme/plugin-*` packages by name, which resolve through the workspace
   symlinks in the repo's root `node_modules`. `npm run dev` starts it. Verified:
   the app loads real plugins and extracts metadata with no `node_modules` in the
   instance.
@@ -311,37 +353,42 @@ packages/
 **Util/domain modules live under `src/lib/`.** Outside `lib`: `src/server` (HTTP),
 `src/web` (frontend), `src/worker` (background extraction — core, not a util), and
 `src/index.js` (package entry). Single-file modules go directly in `lib/` (e.g.
-`lib/assets.js`); multi-file modules keep a folder (e.g. `lib/auth/`).
+`lib/files.js`); multi-file modules keep a folder (e.g. `lib/auth/`).
 
-- `packages/cli/{bin/archive.js, src/cli.js, src/prompt.js}` — CLI.
+- `packages/cli/{bin/gemme.js, src/cli.js, src/prompt.js}` — CLI.
 - `index.js` — package entry: re-exports the public API from `lib/*` + `server/`.
 - `lib/config.js` — flag/env/default config resolution (+ `parseFlags`).
-- `lib/db/` — `index.js` (single `node:sqlite` access point), `migrate.js`, `migrations/*.sql`.
+- `lib/db/` — `index.js` (single `node:sqlite` access point), `migrate.js` (applies
+  `migrations/*.sql` in filename order, tracked in `schema_migrations`), `migrations/*.sql`.
+  Migrations are a **consolidated baseline** (001 core → 002 sessions → 003 metadata+jobs
+  → 004 collections): since nothing is deployed yet, early `ALTER TABLE`s were folded back
+  into the original `CREATE TABLE`s for a clean starting point. Add new schema changes as
+  new numbered migrations from here — don't rewrite the baseline once there's real data.
 - `lib/storage/` — `blobs.js` (content-addressed, SHA-256), `derived.js` (thumbnails).
 - `lib/auth/` — `passwords.js` (scrypt), `users.js`, `sessions.js`.
-- `lib/assets.js` — asset/version data layer + versioning rules.
+- `lib/files.js` — file/version data layer + versioning rules.
 - `lib/collections.js` — collection tree + closure maintenance + membership.
 - `lib/facets.js` — distinct-value + count aggregation per metadata key.
 - `lib/bus.js` — in-process `change` pub/sub shared by routes + worker + SSE.
 - `lib/metadata/` — `core.js` (shared core-metadata), `store.js` (typed EAV + FTS;
   `indexVersionCore` for upload-time indexing).
 - `lib/search/` — `dsl.js` (parse/compile), `compose.js` (state⇄string⇄URL),
-  `search.js` (`searchAssets`, `paginatedSearch`).
+  `search.js` (`searchFiles`, `paginatedSearch`).
 - `lib/plugins/` — `registry.js` (`PluginRegistry` + apiVersion check), `config.js` (loader).
 - `worker/` — `extract.js` (core + plugin merge, thumbnails), `queue.js`, `index.js`
   (`ExtractionWorker`, `runPending`; emits `change`; requires an explicit registry).
   Top-level (not a util); imports its deps from `../lib/…`.
 - `server/` — `index.js` (createApp), `router.js`, `respond.js`, `middleware.js`,
-  `upload.js`, `routes/{auth,assets,search,pages,events,facets,collections}.js`.
-- `web/` — `render.js` + `public/{app.js,styles.css}`; `<archive-assets>` does
-  keyed reconciliation + SSE, `<archive-search>` emits query events.
+  `upload.js`, `routes/{auth,files,search,pages,events,facets,collections}.js`.
+- `web/` — `render.js` + `public/{app.js,styles.css}`; `<gemme-files>` does
+  keyed reconciliation + SSE, `<gemme-search>` emits query events.
 - Tests live in each package's `test/`; `server/test/helpers/` boots an ephemeral
   app and provides a `fakeRegistry()` so server tests don't depend on the real
   plugin packages (those are tested in their own packages).
 
 ### Not yet done / known gaps
 
-- `@archive/*` packages are **not published to npm** yet, so `archive init` with a
+- `@gemme/*` packages are **not published to npm** yet, so `gemme init` with a
   real install only works once published; today the working path is the in-repo
   dev instance (workspace symlinks). Publishing is a future step.
 - Thumbnails exist for **images** (plugin-image via sharp). Video/PDF/etc.

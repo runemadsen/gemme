@@ -1,4 +1,4 @@
-import { apiVersion as SUPPORTED_API } from '@archive/plugin-api';
+import { apiVersion as SUPPORTED_API } from '@gemme/plugin-api';
 
 /**
  * Holds the set of metadata-extraction plugins for a running instance. Plugins

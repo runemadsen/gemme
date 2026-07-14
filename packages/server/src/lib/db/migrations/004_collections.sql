@@ -1,9 +1,9 @@
--- Collections: nestable groups of assets.
+-- Collections: nestable groups of files.
 --
 -- `parent_id` gives the tree (ON DELETE CASCADE recurses, so deleting a
--- collection removes its whole subtree — assets are untouched, only membership
+-- collection removes its whole subtree — files are untouched, only membership
 -- rows go). `collection_closure` holds every ancestor→descendant pair (incl. a
--- self row at depth 0), so "all assets in a collection incl. descendants" is a
+-- self row at depth 0), so "all files in a collection incl. descendants" is a
 -- single indexed join regardless of tree depth.
 
 CREATE TABLE collections (
@@ -17,14 +17,14 @@ CREATE TABLE collections (
 CREATE INDEX idx_collections_parent ON collections(parent_id);
 CREATE INDEX idx_collections_name ON collections(name);
 
--- Many-to-many membership. An asset may belong to any number of collections.
-CREATE TABLE asset_collections (
-  asset_id      INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+-- Many-to-many membership. A file may belong to any number of collections.
+CREATE TABLE file_collections (
+  file_id      INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
   added_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  PRIMARY KEY (asset_id, collection_id)
+  PRIMARY KEY (file_id, collection_id)
 );
-CREATE INDEX idx_ac_collection ON asset_collections(collection_id);
+CREATE INDEX idx_fc_collection ON file_collections(collection_id);
 
 CREATE TABLE collection_closure (
   ancestor   INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,

@@ -1,22 +1,21 @@
 # TODO list
 
-## Collections — follow-ups
+## Serving collections
 
-The core of collections is built (nesting, descendant-inclusive filtering by
-name, sidebar tree, CRUD page + API, membership). Remaining:
+Now that collections have been built, I need the ability to serve all images in
+a collection in a public manner, so the images can be used e.g. on a website,
+etc. Here's what's needed:
 
-- Sharing mechanisms are built on collections. So, you set the permission on a
-  collection to be public, and the link works for all assets in the collection.
-- It should be easy to add a bunch of assets to a collection. When I upload a
-  bunch of assets, make a UI element that allows me to add these assets to a
-  collection, or create a new one.
+- A collection can either be set to private (default) or public
+- When set to public, all images in a collection can be reached on a URL
+- TBD: image resizing happens on the fly and saves a resized version of the
+  image
 
 ## Other
 
-- Make an early attempt at what the UI should be: Close to defaults (system font
-  from [here](https://css-tricks.com/snippets/css/system-font-stack/) and
-  leaning on text and nothing else). Use picture I screenshotted from instagram
-  of a tailor ticket.
 - Figure out a setting to group RAW files with their JPG counterparts. Are there
   other things like this that requires grouping?
-- RAW files don't have width and height
+- What do I do with image formats (such as all the RAW formats) that aren't
+  getting thumbnails right now? Should it just be included in the image plugin,
+  or how can I approach it?
+- Multiple-select on files to add to a collection

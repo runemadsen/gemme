@@ -13,7 +13,7 @@ function tableNames(db) {
 test('migration creates the core tables', () => {
   const db = openMemoryDatabase(); // migrates on open
   const tables = tableNames(db);
-  for (const t of ['users', 'assets', 'versions', 'schema_migrations']) {
+  for (const t of ['users', 'files', 'versions', 'schema_migrations']) {
     assert.ok(tables.includes(t), `expected table ${t}`);
   }
   db.close();
@@ -37,10 +37,10 @@ test('applied migrations are recorded in schema_migrations', () => {
 
 test('foreign keys are enforced', () => {
   const db = openMemoryDatabase();
-  // versions.asset_id references a non-existent asset -> should fail
+  // versions.file_id references a non-existent file -> should fail
   assert.throws(() => {
     db.prepare(
-      'INSERT INTO versions (asset_id, content_hash, byte_size) VALUES (?, ?, ?)'
+      'INSERT INTO versions (file_id, content_hash, byte_size) VALUES (?, ?, ?)'
     ).run(999, 'deadbeef', 10);
   }, /FOREIGN KEY/i);
   db.close();

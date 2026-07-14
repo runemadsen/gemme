@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 /**
- * A tiny in-process pub/sub for "the asset list may have changed" signals.
+ * A tiny in-process pub/sub for "the file list may have changed" signals.
  * Write routes and the extraction worker emit `change`; the SSE endpoint
  * (/api/events) forwards those to connected browsers, which re-run their
  * current query. One bus is shared across the server + worker in a run.

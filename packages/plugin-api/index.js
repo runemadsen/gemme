@@ -1,5 +1,5 @@
 /**
- * @archive/plugin-api — the stable contract every Archive plugin implements.
+ * @gemme/plugin-api — the stable contract every Gemme plugin implements.
  *
  * Plugins depend on this tiny package (not on the server), so they don't couple
  * to core internals and can be versioned independently. The server checks a
@@ -7,7 +7,7 @@
  *
  * A plugin module default-exports a *factory* so it can take options:
  *
- *   import { definePlugin } from '@archive/plugin-api';
+ *   import { definePlugin } from '@gemme/plugin-api';
  *   export default function myPlugin(options = {}) {
  *     return definePlugin({
  *       id: 'my-plugin',

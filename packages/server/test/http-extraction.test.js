@@ -20,16 +20,16 @@ test('uploading enqueues extraction and metadata becomes searchable', async () =
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
 
-    const up = await app.upload('/api/assets', {
+    const up = await app.upload('/api/files', {
       filename: 'trip.md',
       contentType: 'text/markdown',
       body: '# Trip\nmountain sky river',
     });
-    const versionId = up.json.asset.current_version_id;
+    const versionId = up.json.file.current_version_id;
     assert.deepEqual(enqueued, [versionId], 'onVersionCreated fired with the new version id');
 
     // Status starts pending (usable immediately, metadata fills in later)
-    assert.equal(up.json.asset.versions[0].extraction_status, 'pending');
+    assert.equal(up.json.file.versions[0].extraction_status, 'pending');
 
     // Drain the queue (what the background worker does on its tick)
     const ctx = { blobStore: new BlobStore(app.dataDir), registry: fakeRegistry() };

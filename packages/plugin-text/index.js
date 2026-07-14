@@ -1,4 +1,4 @@
-import { definePlugin } from '@archive/plugin-api';
+import { definePlugin } from '@gemme/plugin-api';
 
 const TEXT_MIME = /^text\//;
 const TEXT_EXT = /\.(txt|md|markdown|csv|json|xml|ya?ml|html?|css|js|ts|log)$/i;

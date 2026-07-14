@@ -34,6 +34,15 @@ test('matches images by mime and extension', () => {
   assert.equal(p.matches('text/plain', 'a.txt'), false);
 });
 
+test('matches RAW formats by extension despite a generic mime', () => {
+  const p = imagePlugin();
+  // Browsers send octet-stream for RAW; matching must key off the extension.
+  for (const name of ['shot.arw', 'shot.RAF', 'a.nef', 'b.cr2', 'c.dng', 'd.orf']) {
+    assert.equal(p.matches('application/octet-stream', name), true, name);
+  }
+  assert.equal(p.matches('application/octet-stream', 'notes.txt'), false);
+});
+
 test('extracts dimensions + orientation from a PNG', async () => {
   const p = imagePlugin({ exif: false });
   const { metadata } = await p.extract({ buffer: png(1920, 1080), mimeType: 'image/png', filename: 'w.png' });
@@ -75,6 +84,41 @@ test('skips thumbnail when a prior plugin already produced one', async () => {
   });
   assert.equal(res.thumbnail, undefined, 'no thumbnail generated when prior.thumbnail is set');
   assert.ok(res.metadata.length > 0, 'metadata is still extracted');
+});
+
+// Build a minimal Fuji RAF: the `FUJIFILMCCD-RAW ` magic + a JPEG preview whose
+// offset/length are recorded at 0x54/0x58 (big-endian), like a real .raf.
+async function fakeRaf(jpeg) {
+  const header = Buffer.alloc(0x5c);
+  header.write('FUJIFILMCCD-RAW ', 0, 'latin1');
+  header.writeUInt32BE(0x5c, 0x54); // preview offset
+  header.writeUInt32BE(jpeg.length, 0x58); // preview length
+  return Buffer.concat([header, jpeg]);
+}
+
+test('RAW: slices the embedded JPEG from a Fuji RAF and thumbnails it', async () => {
+  const p = imagePlugin({ exif: false });
+  const jpeg = await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 1, g: 2, b: 3 } } })
+    .jpeg()
+    .toBuffer();
+  const raf = await fakeRaf(jpeg);
+  const res = await p.extract({ buffer: raf, filename: 'DSCF1.RAF', mimeType: 'application/octet-stream', thumbnailTarget: TARGET });
+  assert.ok(res.thumbnail, 'RAF embedded preview produced a thumbnail');
+  assert.equal(res.thumbnail.contentType, 'image/webp');
+  const meta = await sharp(res.thumbnail.data).metadata();
+  assert.ok(meta.width <= 256 && meta.height <= 256);
+});
+
+test('RAW: an undecodable RAF degrades to metadata-only, never throws', async () => {
+  const p = imagePlugin();
+  const res = await p.extract({
+    buffer: Buffer.from('not really a raf'),
+    filename: 'broken.raf',
+    mimeType: 'application/octet-stream',
+    thumbnailTarget: TARGET,
+  });
+  assert.equal(res.thumbnail, undefined, 'no thumbnail when no preview can be extracted');
+  assert.ok(Array.isArray(res.metadata), 'still returns (empty) metadata, no crash');
 });
 
 test('no thumbnail when target is absent', async () => {

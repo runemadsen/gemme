@@ -10,11 +10,5 @@ etc. Here's what's needed:
 - When set to public, all images in a collection can be reached on a URL
 - TBD: image resizing happens on the fly and saves a resized version of the
   image
-
-## Other
-
-- Figure out a setting to group RAW files with their JPG counterparts. Are there
-  other things like this that requires grouping?
-- What do I do with image formats (such as all the RAW formats) that aren't
-  getting thumbnails right now? Should it just be included in the image plugin,
-  or how can I approach it?
+- TBD: Figure out how the resized images can have long cache control because
+  they are immutable, without needing to have the version number in the URL's

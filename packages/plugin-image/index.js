@@ -1,24 +1,7 @@
 import { definePlugin } from '@gemme/plugin-api';
 import exifr from 'exifr';
-import sharp from 'sharp';
-import { imageSize } from './image-size.js';
-
-const IMAGE_MIME = /^image\//;
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|tiff?|heic|avif)$/i;
-
-// EXIF tags we surface, mapped to archive metadata keys + types.
-const EXIF_MAP = [
-  ['Make', 'camera_make', 'text'],
-  ['Model', 'camera_model', 'text'],
-  ['LensModel', 'lens', 'text'],
-  ['ISO', 'iso', 'number'],
-  ['FNumber', 'f_number', 'number'],
-  ['ExposureTime', 'exposure_time', 'number'],
-  ['FocalLength', 'focal_length', 'number'],
-  ['DateTimeOriginal', 'taken_at', 'date'],
-  ['latitude', 'gps_lat', 'number'],
-  ['longitude', 'gps_lng', 'number'],
-];
+import { IMAGE_MIME, IMAGE_EXT, RAW_EXT, EXIF_MAP } from './constants.js';
+import { imageSize, pushDimensions, rafPreview, embeddedPreview, makeThumbnail } from './utils.js';
 
 /**
  * Image plugin factory. Combines two extractors:
@@ -36,61 +19,56 @@ export default function imagePlugin(options = {}) {
   return definePlugin({
     id: 'image',
     matches(mimeType, filename) {
-      return IMAGE_MIME.test(mimeType || '') || IMAGE_EXT.test(filename || '');
+      return IMAGE_MIME.test(mimeType || '') || IMAGE_EXT.test(filename || '') || RAW_EXT.test(filename || '');
     },
-    async extract({ buffer, thumbnailTarget, prior }) {
+    async extract({ buffer, filename, thumbnailTarget, prior }) {
       const metadata = [];
+      const isRaw = RAW_EXT.test(filename || '');
 
-      const size = imageSize(buffer);
-      if (size) {
-        metadata.push({ key: 'width', value: size.width, type: 'number' });
-        metadata.push({ key: 'height', value: size.height, type: 'number' });
-        if (size.height > 0) {
-          metadata.push({
-            key: 'orientation',
-            value: size.width >= size.height ? 'landscape' : 'portrait',
-            type: 'text',
-          });
+      // Fuji RAF isn't TIFF-based, so exifr can't read it directly — but it embeds
+      // a full-size JPEG preview we can slice out. TIFF-based RAW (ARW/NEF/CR2/
+      // DNG/…) is read by exifr straight from the buffer.
+      const rafJpeg = isRaw ? rafPreview(buffer) : null;
+
+      // Parse EXIF once. For RAF the EXIF lives inside the embedded JPEG; for
+      // everything else it's in the file itself.
+      let tags = null;
+      if (wantExif || isRaw) {
+        try {
+          tags = (await exifr.parse(rafJpeg || buffer, { gps: wantGps })) || {};
+        } catch {
+          // Not all images carry (parseable) EXIF; ignore and keep what we can.
         }
       }
 
-      if (wantExif) {
-        try {
-          const tags = (await exifr.parse(buffer, { gps: wantGps })) || {};
-          for (const [tag, key, type] of EXIF_MAP) {
-            if ((key === 'gps_lat' || key === 'gps_lng') && !wantGps) continue;
-            const value = tags[tag];
-            if (value == null) continue;
-            metadata.push({ key, value: type === 'date' ? new Date(value) : value, type });
-          }
-        } catch {
-          // Not all images carry (parseable) EXIF; ignore and keep dimensions.
+      if (isRaw) {
+        // RAW dimensions come from EXIF — imageSize's header parser would misread
+        // a TIFF-based RAW's thumbnail IFD.
+        pushDimensions(metadata, tags?.ExifImageWidth ?? tags?.ImageWidth, tags?.ExifImageHeight ?? tags?.ImageHeight);
+      } else {
+        const size = imageSize(buffer);
+        if (size) pushDimensions(metadata, size.width, size.height);
+      }
+
+      if (wantExif && tags) {
+        for (const [tag, key, type] of EXIF_MAP) {
+          if ((key === 'gps_lat' || key === 'gps_lng') && !wantGps) continue;
+          const value = tags[tag];
+          if (value == null) continue;
+          metadata.push({ key, value: type === 'date' ? new Date(value) : value, type });
         }
       }
 
       // Generate a thumbnail only if one is wanted and no earlier plugin made one.
+      // sharp can't decode RAW, so feed it an embedded JPEG preview: the RAF one
+      // we already sliced, else the (smaller) exifr thumbnail for TIFF-based RAW.
       let thumbnail;
       if (thumbnailTarget && !prior?.thumbnail) {
-        thumbnail = await makeThumbnail(buffer, thumbnailTarget);
+        const source = isRaw ? rafJpeg || (await embeddedPreview(buffer)) : buffer;
+        if (source) thumbnail = await makeThumbnail(source, thumbnailTarget);
       }
 
       return thumbnail ? { metadata, thumbnail } : { metadata };
     },
   });
-}
-
-/**
- * Resize to fit within maxEdge (never upscaling), auto-orienting from EXIF, and
- * encode to the requested format. Returns null if the image can't be decoded.
- */
-async function makeThumbnail(buffer, { maxEdge = 512, format = 'webp' } = {}) {
-  try {
-    const pipeline = sharp(buffer, { failOn: 'none' })
-      .rotate() // honor EXIF orientation
-      .resize(maxEdge, maxEdge, { fit: 'inside', withoutEnlargement: true });
-    const data = await pipeline.toFormat(format).toBuffer();
-    return { data, contentType: `image/${format}` };
-  } catch {
-    return null; // undecodable image — skip the thumbnail, keep metadata
-  }
 }

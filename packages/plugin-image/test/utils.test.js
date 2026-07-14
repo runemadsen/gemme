@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { imageSize } from '../image-size.js';
+import { imageSize } from '../utils.js';
 
 function png(w, h) {
   const b = Buffer.alloc(24);

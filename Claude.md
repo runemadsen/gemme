@@ -245,6 +245,33 @@ packages/
   (via `sharp`, auto-oriented). Served at `GET /api/files/:id/thumbnail`
   (cache-busted per version); list/search expose `thumbnail_type`. Grid uses
   thumbnail-or-gray (no full-image fallback).
+- **RAW images (`plugin-image`, done).** Camera RAW (`arw sr2 srf cr2 cr3 nef nrw
+  raf orf rw2 dng pef srw 3fr iiq rwl mrw dcr kdc mos`) is supported without new
+  deps. `matches` accepts RAW **by extension** (browsers send
+  `application/octet-stream`). sharp can't decode RAW, so thumbnails always come
+  from an **embedded JPEG preview**; there are two RAW families:
+  - **TIFF-based** (ARW/NEF/CR2/DNG/ORF/RW2/…): exifr reads them straight from the
+    buffer — dimensions from EXIF (`ExifImageWidth/Height`), fields via `EXIF_MAP`,
+    thumbnail from `exifr.thumbnail(buffer)` (the small, ~160px IFD1 thumbnail).
+  - **Fuji RAF** (and other non-TIFF containers): exifr throws "Unknown file
+    format", so `rafPreview()` parses the `FUJIFILMCCD-RAW ` header (JPEG
+    offset/length at 0x54/0x58, big-endian) to slice out the **full-size** embedded
+    JPEG; exifr reads its EXIF/dimensions and sharp makes the thumbnail from it
+    (so RAF thumbnails are high quality).
+  Any failure degrades to metadata-only (no thumbnail), never blocks ingest. Known
+  limits: TIFF-based previews are small/soft, EXIF dims are approximate — a real
+  decoder (libraw/exiftool) is the deferred upgrade, behind the plugin boundary.
+  Note: changing this code only affects **new** uploads; existing files must be
+  re-extracted (re-run `runExtraction` per version) to pick it up.
+- **Extension-first categorization.** `metadata/core.js` `categorize(mimeType,
+  filename)` classifies by **extension** first (an `EXT_CATEGORY` map incl. RAW →
+  `image`), falling back to MIME when the extension is unknown/absent — so a
+  RAW upload is `type:image` in the facet/filter despite its generic MIME. The
+  detail page (`render.js`) also decides the preview by extension: web-renderable
+  images (`png jpg jpeg gif webp avif svg`) show the full `/download`; other
+  images (RAW, heic, tiff) show the generated `/thumbnail` (raw bytes won't render
+  in a browser); everything else has no preview. RAW ext list is duplicated in
+  `plugin-image` `RAW_EXT` and core `EXT_CATEGORY` (separate packages) — keep in sync.
   - **Image cache policy (thumbnails + downloads).** The UI references
     **version-pinned** URLs for cached display — the grid thumbnail is
     `/api/files/:id/versions/:vid/thumbnail` and the detail photo is

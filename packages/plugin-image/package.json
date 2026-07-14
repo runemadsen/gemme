@@ -17,7 +17,8 @@
   },
   "files": [
     "index.js",
-    "image-size.js"
+    "constants.js",
+    "utils.js"
   ],
   "license": "MIT"
 }

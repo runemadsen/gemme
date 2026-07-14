@@ -3,6 +3,12 @@
  * interactivity is layered on by the Web Component islands in /static/app.js.
  */
 import { stateToUrl, SORT_KEYS, PER_PAGE_OPTIONS } from '../lib/search/compose.js';
+import { categorize } from '../lib/metadata/core.js';
+
+// Image formats a browser can render inline from raw bytes. Others that still
+// categorize as images (RAW, heic, tiff) are shown via their generated webp
+// thumbnail instead, since the browser can't display the original bytes.
+const WEB_IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 
 const SORT_LABELS = { date: 'Upload date', name: 'Filename' };
 
@@ -175,12 +181,17 @@ function cardInner(item) {
 
 export function renderDetail({ user, file, metadata }) {
   const current = file.versions.find((v) => v.is_current);
-  const isImage = /^image\//.test(current?.mime_type || '');
-  // Version-pinned URL: the full image is served `immutable` in production, and
-  // switches automatically when a new version becomes current.
-  const preview = isImage
-    ? `<img src="/api/files/${file.id}/versions/${current.id}/download" alt="">`
-    : '';
+  const name = file.original_filename;
+  // Version-pinned URLs: served `immutable` in production, and switch
+  // automatically when a new version becomes current.
+  let preview = '';
+  if (current && WEB_IMAGE_EXT.test(name)) {
+    // Browser can render the original bytes directly (full resolution).
+    preview = `<img src="/api/files/${file.id}/versions/${current.id}/download" alt="">`;
+  } else if (current?.thumbnail_type && categorize(current.mime_type, name) === 'image') {
+    // RAW / non-web image: show the generated thumbnail (raw bytes won't render).
+    preview = `<img src="/api/files/${file.id}/versions/${current.id}/thumbnail" alt="">`;
+  }
   const metaRows = metadata.length
     ? metadata
         .map(

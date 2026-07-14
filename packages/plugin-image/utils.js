@@ -114,17 +114,23 @@ export async function embeddedPreview(buffer) {
 }
 
 /**
- * Resize to fit within maxEdge (never upscaling), auto-orienting from EXIF, and
- * encode to the requested format. Returns null if the image can't be decoded.
+ * Resize (never upscaling) + auto-orient + re-encode a decodable image buffer.
+ * `width`/`height` may be omitted (reformat-only). Returns `{data, contentType}`,
+ * or null if the buffer can't be decoded by sharp.
+ *
+ * @param {Buffer} buffer
+ * @param {{width?:number, height?:number, fit?:string, quality?:number, format:string}} opts
  */
-export async function makeThumbnail(buffer, { maxEdge = 512, format = 'webp' } = {}) {
+export async function renderImage(buffer, { width, height, fit = 'inside', quality, format } = {}) {
+  const encoder = format === 'jpg' ? 'jpeg' : format;
   try {
-    const pipeline = sharp(buffer, { failOn: 'none' })
-      .rotate() // honor EXIF orientation
-      .resize(maxEdge, maxEdge, { fit: 'inside', withoutEnlargement: true });
-    const data = await pipeline.toFormat(format).toBuffer();
-    return { data, contentType: `image/${format}` };
+    let pipeline = sharp(buffer, { failOn: 'none' }).rotate(); // honor EXIF orientation
+    if (width || height) {
+      pipeline = pipeline.resize(width ?? null, height ?? null, { fit, withoutEnlargement: true });
+    }
+    const data = await pipeline.toFormat(encoder, quality ? { quality } : {}).toBuffer();
+    return { data, contentType: `image/${encoder}` };
   } catch {
-    return null; // undecodable image — skip the thumbnail, keep metadata
+    return null; // undecodable — caller decides (skip thumbnail / 415)
   }
 }

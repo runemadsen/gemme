@@ -107,14 +107,24 @@ Decisions made while working through the concept. Keep this updated as we go.
 ### Plugin interface (decided)
 
 - A plugin exposes `id`, `matches(mimeType, filename)`, and
-  `async extract(blobPath) -> { metadata: [{key, value, type}], fulltext?, thumbnail? }`.
+  `async extract({buffer, mimeType, filename}) -> { metadata: [{key, value, type}], fulltext? }`.
 - **Multiple plugins run per file** and their metadata is **merged** (each row
   tagged with the plugin `id`). E.g. an EXIF plugin and an object-recognition
   plugin both process one image. Per-plugin failure isolation: one crashing plugin
   never blocks ingestion or the others.
 - Core ships an image plugin (EXIF/dimensions) and a PDF plugin (page count/text).
-  External libs (image decode, PDF parse, thumbnailing, AI inference) stay behind
-  the plugin boundary. Thumbnails are a derived artifact produced by a plugin.
+  External libs (image decode, PDF parse, resizing, AI inference) stay behind
+  the plugin boundary.
+- **Optional `renderer` capability (serving).** A plugin may add
+  `renderer = { formats, thumbnail, normalize(params), run(source, spec) }` to
+  serve images (resize/reformat). The **core rendition engine** owns everything
+  cross-cutting (route, visibility, variant cache, clamping, pre-generation); the
+  plugin only declares its output `formats`, a `thumbnail` preset, a cheap
+  deterministic `normalize` (→ the cache key, checked before rendering), and
+  `run` (the bytes; null when undecodable). Thumbnails are just the pre-generated
+  `thumbnail` rendition — not a separate mechanism. A future PDF plugin adds the
+  same shape with `normalize` understanding `page`. See "Renditions & public
+  serving" below.
 
 ### Deferred (not in v1)
 
@@ -233,23 +243,34 @@ packages/
   init`" error. (Interactive `create-user` prompts need a real TTY — through
   `npm run` you pass `--email`/`--password`; the both-TTY guard in
   `cli/src/prompt.js` prevents silently buffered prompts.)
-- **Thumbnails.** Every file *can* have a thumbnail; none is fine (UI shows a
-  gray rectangle — "just the file" still works). Thumbnails are **per-version**
-  (they change with the bytes) and stored in a content-addressed **derived store**
-  (`server/src/storage/derived.js`, `<dataDir>/derived/<hash>.thumb.<ext>`); the
-  version records `thumbnail_type` (in the core schema, migration 001). Plugins run **in registry
-  order** and each `extract()` receives `thumbnailTarget` ({maxEdge:512,
-  format:'webp'}, core-provided) and `prior` (accumulated metadata + whether a
-  thumbnail already exists). **First plugin to return one wins**; later plugins
-  see `prior.thumbnail === true` and skip. Only `plugin-image` makes them today
-  (via `sharp`, auto-oriented). Served at `GET /api/files/:id/thumbnail`
-  (cache-busted per version); list/search expose `thumbnail_type`. Grid uses
-  thumbnail-or-gray (no full-image fallback).
+- **Renditions & public serving (unified).** A **rendition** is a derived image
+  produced from a source version by a plugin's `renderer` (§ Plugin interface).
+  Thumbnails and public on-the-fly transforms are the SAME mechanism. Core engine:
+  `lib/renditions.js` (`rendererFor`, `parseSpecSegment`, `specSig`, `getRendition`,
+  `thumbnailSpec`, `specFromString`). Variants are content-addressed in the
+  **derived store** (`lib/storage/derived.js`,
+  `<dataDir>/derived/<sourceHash>.<sig>.<ext>`, `sig` = hash of the canonical
+  spec+ext) — generated once, shared across collections. `getRendition` checks
+  the cache (via the cheap `normalize` key) before calling the expensive `run`.
+  - **Thumbnail = a pre-generated rendition.** The worker (`worker/extract.js`
+    `pregenerateRenditions`), after metadata extraction, generates the renderer's
+    `thumbnail` preset (512w webp) + any `config.renditions.pregenerate` sizes,
+    and records the thumbnail's content type in `versions.thumbnail_type` (kept
+    for cheap grid rendering; list/search still expose it). No renderer → no
+    thumbnail (gray box). `extract` no longer produces thumbnails.
+  - **Served** at `GET /api/files/:id[/versions/:vid]/thumbnail` (auth) — the
+    thumbnail-preset rendition, generated on demand if not yet cached, same cache
+    policy as before (pinned immutable in prod, bare no-cache; dev never
+    immutable). Because thumbnail and `/i/:id/w=512.webp` normalize to the same
+    spec, they share one variant file.
+  - The registry reaches the request path via `ctx.registry` (threaded through
+    `createApp`/`startServer`; the CLI passes the loaded registry + `config.renditions`).
 - **RAW images (`plugin-image`, done).** Camera RAW (`arw sr2 srf cr2 cr3 nef nrw
   raf orf rw2 dng pef srw 3fr iiq rwl mrw dcr kdc mos`) is supported without new
   deps. `matches` accepts RAW **by extension** (browsers send
-  `application/octet-stream`). sharp can't decode RAW, so thumbnails always come
-  from an **embedded JPEG preview**; there are two RAW families:
+  `application/octet-stream`). sharp can't decode RAW, so the renderer's `run()`
+  (and `extract`'s dimension read) always work from an **embedded JPEG preview**;
+  there are two RAW families:
   - **TIFF-based** (ARW/NEF/CR2/DNG/ORF/RW2/…): exifr reads them straight from the
     buffer — dimensions from EXIF (`ExifImageWidth/Height`), fields via `EXIF_MAP`,
     thumbnail from `exifr.thumbnail(buffer)` (the small, ~160px IFD1 thumbnail).
@@ -309,7 +330,26 @@ packages/
   `store.filters.collection`), a `/collections` manager page, and membership
   checkboxes (by id) on the file detail page. Delete cascades the subtree (files
   untouched). Files: `collections/collections.js`,
-  `server/routes/collections.js`, migration 004. Deferred: collection-based sharing.
+  `server/routes/collections.js`, migration 004.
+- **Collection visibility (public serving, done).** `collections.visibility`
+  (`private` default | `public`, migration 004) cascades to the whole subtree: a
+  file is public if it's in any collection whose ancestor (incl. self) is public
+  (`isFilePublic`, a closure EXISTS mirroring the collection filter). Toggle via
+  `PATCH /api/collections/:id {visibility}`; the `/collections` manager has a
+  make-public/private button + badge, the sidebar shows a dot, and a public file's
+  detail page shows its `/i/:id` URL + a copyable `srcset` snippet. **Public
+  routes** (`server/routes/public.js`, unauthenticated) serve the **current
+  version only**, 404 (never 403) for non-public/missing:
+  - `GET /i/:id` → original bytes (any type).
+  - `GET /i/:id/:spec` → an image rendition, e.g. `/i/42/w=800,fit=cover.webp`.
+    Output format is the **extension**; params (`w,h,fit,q`) are comma-separated
+    and clamped by the renderer's `normalize` (w/h ≤ 4096, q 1–100). Goes through
+    the same rendition engine + variant cache as thumbnails.
+  - **Cache:** stable by-id URLs (no content hash), so not immutable — strong ETag
+    (`"<hash>-<sig>"`) + `public, max-age=300, stale-while-revalidate=604800`
+    (dev: `no-cache`), honoring `If-None-Match` → 304. A new current version
+    changes the hash → the ETag, so CDNs/browsers revalidate. Shared streaming
+    helper: `server/render-response.js`.
 - **Membership API is bulk (one collection × many files).**
   `POST` / `DELETE /api/collections/:id/files` with `{ fileIds }` add/remove a
   **set** of files to/from one collection in a single transaction, and work for
@@ -418,17 +458,21 @@ packages/
 - `lib/files.js` — file/version data layer + versioning rules.
 - `lib/collections.js` — collection tree + closure maintenance + membership.
 - `lib/facets.js` — distinct-value + count aggregation per metadata key.
+- `lib/renditions.js` — rendition engine (renderer selection, spec parse, cache
+  key, generate-or-cache; thumbnails + public transforms share it).
 - `lib/bus.js` — in-process `change` pub/sub shared by routes + worker + SSE.
 - `lib/metadata/` — `core.js` (shared core-metadata), `store.js` (typed EAV + FTS;
   `indexVersionCore` for upload-time indexing).
 - `lib/search/` — `dsl.js` (parse/compile), `compose.js` (state⇄string⇄URL),
   `search.js` (`searchFiles`, `paginatedSearch`).
 - `lib/plugins/` — `registry.js` (`PluginRegistry` + apiVersion check), `config.js` (loader).
-- `worker/` — `extract.js` (core + plugin merge, thumbnails), `queue.js`, `index.js`
-  (`ExtractionWorker`, `runPending`; emits `change`; requires an explicit registry).
-  Top-level (not a util); imports its deps from `../lib/…`.
-- `server/` — `index.js` (createApp), `router.js`, `respond.js`, `middleware.js`,
-  `upload.js`, `routes/{auth,files,search,pages,events,facets,collections}.js`.
+- `worker/` — `extract.js` (core + plugin merge + `pregenerateRenditions`),
+  `queue.js`, `index.js` (`ExtractionWorker`, `runPending`; emits `change`;
+  requires an explicit registry). Top-level (not a util); imports from `../lib/…`.
+- `server/` — `index.js` (createApp; threads `registry` onto `ctx`), `router.js`,
+  `respond.js`, `render-response.js` (shared rendition streaming + 304),
+  `middleware.js`, `upload.js`,
+  `routes/{auth,files,search,pages,events,facets,collections,public}.js`.
 - `web/` — `render.js` + `public/{app.js,styles.css}`; `<gemme-files>` does
   keyed reconciliation + SSE, `<gemme-search>` emits query events.
 - Tests live in each package's `test/`; `server/test/helpers/` boots an ephemeral

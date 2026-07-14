@@ -10,6 +10,10 @@ CREATE TABLE collections (
   id         INTEGER PRIMARY KEY,
   name       TEXT NOT NULL,
   parent_id  INTEGER REFERENCES collections(id) ON DELETE CASCADE,
+  -- 'private' (default) or 'public'. Public cascades to the whole subtree: a
+  -- file is public if it belongs to any collection whose ancestor (incl. self)
+  -- is public (see isFilePublic, which joins through collection_closure).
+  visibility TEXT NOT NULL DEFAULT 'private',
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))

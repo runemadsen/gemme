@@ -1,6 +1,6 @@
 import { BlobStore } from '../lib/storage/blobs.js';
 import { DerivedStore } from '../lib/storage/derived.js';
-import { runExtraction, DEFAULT_THUMBNAIL_TARGET } from './extract.js';
+import { runExtraction } from './extract.js';
 import { claimNextJob, completeJob, failJob, enqueueExtraction } from './queue.js';
 
 export { enqueueExtraction } from './queue.js';
@@ -50,14 +50,14 @@ export async function runPending(db, ctx) {
  * picked up on the next tick; also drains anything left pending at startup.
  */
 export class ExtractionWorker {
-  constructor(db, { dataDir, registry, intervalMs = 250, thumbnailTarget = DEFAULT_THUMBNAIL_TARGET, events } = {}) {
+  constructor(db, { dataDir, registry, intervalMs = 250, renditions, events } = {}) {
     if (!registry) throw new Error('ExtractionWorker requires a plugin registry');
     this.db = db;
     this.ctx = {
       blobStore: new BlobStore(dataDir),
       derivedStore: new DerivedStore(dataDir),
       registry,
-      thumbnailTarget,
+      renditions,
       events,
     };
     this.intervalMs = intervalMs;

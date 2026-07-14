@@ -17,21 +17,23 @@ test('extForType maps content types to extensions', () => {
   assert.equal(extForType('application/x-unknown'), 'bin');
 });
 
-test('putThumb stores at a sharded, type-suffixed path and round-trips', async () => {
+test('putVariant stores at a sharded, sig+ext path and round-trips', async () => {
   const { store } = await tmpStore();
   const hash = 'abcdef0123456789';
-  assert.equal(store.hasThumb(hash, 'image/webp'), false);
+  const sig = 'deadbeefcafef00d';
+  assert.equal(store.hasVariant(hash, sig, 'webp'), false);
 
-  await store.putThumb(hash, 'image/webp', Buffer.from('thumb-bytes'));
-  assert.equal(store.hasThumb(hash, 'image/webp'), true);
+  await store.putVariant(hash, sig, 'webp', Buffer.from('variant-bytes'));
+  assert.equal(store.hasVariant(hash, sig, 'webp'), true);
 
-  const p = store.thumbPath(hash, 'image/webp');
-  assert.ok(p.endsWith(path.join('ab', 'cd', `${hash}.thumb.webp`)));
+  const p = store.variantPath(hash, sig, 'webp');
+  assert.ok(p.endsWith(path.join('ab', 'cd', `${hash}.${sig}.webp`)));
   assert.ok(fs.existsSync(p));
+  assert.ok(store.statVariant(hash, sig, 'webp').size > 0);
 
   const back = await new Promise((resolve) => {
     const chunks = [];
-    store.createThumbReadStream(hash, 'image/webp').on('data', (c) => chunks.push(c)).on('end', () => resolve(Buffer.concat(chunks)));
+    store.createVariantReadStream(hash, sig, 'webp').on('data', (c) => chunks.push(c)).on('end', () => resolve(Buffer.concat(chunks)));
   });
-  assert.equal(back.toString(), 'thumb-bytes');
+  assert.equal(back.toString(), 'variant-bytes');
 });

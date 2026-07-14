@@ -162,6 +162,13 @@ gemme-search { display: block; margin: 4px 0 16px; }
 .grid.selecting .card.selected { border-color: var(--accent); }
 .grid.selecting .card.selected::after { content: '✓'; background: var(--accent); border-color: var(--accent); }
 
+/* --- collection visibility --- */
+.badge.pub { text-transform: uppercase; letter-spacing: var(--track); font-size: 0.8em; font-weight: 700;
+  color: var(--accent); border: 1px solid var(--accent); padding: 0 4px; margin-left: 6px; }
+.pubdot { color: var(--accent); margin-left: 4px; }
+.detail .url { display: inline-block; padding: 2px 6px; border: 1px solid var(--line); }
+.detail .snippet { border: 1px solid var(--line); padding: 10px; overflow-x: auto; white-space: pre; }
+
 /* --- pager (numbered, 1px cells) --- */
 .pager { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; margin: 22px auto 0;
   width: fit-content; border: 1px solid var(--line); }

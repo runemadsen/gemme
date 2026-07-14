@@ -9,6 +9,7 @@ import { registerPageRoutes } from './routes/pages.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerFacetRoutes } from './routes/facets.js';
 import { registerCollectionRoutes } from './routes/collections.js';
+import { registerPublicRoutes } from './routes/public.js';
 import { BlobStore } from '../lib/storage/blobs.js';
 import { DerivedStore } from '../lib/storage/derived.js';
 import { createEventBus } from '../lib/bus.js';
@@ -27,6 +28,7 @@ export function buildRouter() {
   registerEventRoutes(router);
   registerFacetRoutes(router);
   registerCollectionRoutes(router);
+  registerPublicRoutes(router);
   return router;
 }
 
@@ -39,7 +41,7 @@ export function buildRouter() {
  * @param {string} opts.dataDir
  * @param {boolean} [opts.secure] - set Secure on cookies (behind HTTPS)
  */
-export function createApp({ db, dataDir, secure = false, dev = false, onVersionCreated, events = createEventBus() }) {
+export function createApp({ db, dataDir, secure = false, dev = false, registry, onVersionCreated, events = createEventBus() }) {
   const router = buildRouter();
   const blobStore = new BlobStore(dataDir);
   const derivedStore = new DerivedStore(dataDir);
@@ -62,6 +64,7 @@ export function createApp({ db, dataDir, secure = false, dev = false, onVersionC
         dataDir,
         blobStore,
         derivedStore,
+        registry,
         events,
         secure,
         dev,
@@ -79,8 +82,8 @@ export function createApp({ db, dataDir, secure = false, dev = false, onVersionC
 }
 
 /** Create the server and start listening. */
-export function startServer({ db, port, dataDir, secure = false, dev = false, onVersionCreated, events }) {
-  const server = createApp({ db, dataDir, secure, dev, onVersionCreated, events });
+export function startServer({ db, port, dataDir, secure = false, dev = false, registry, onVersionCreated, events }) {
+  const server = createApp({ db, dataDir, secure, dev, registry, onVersionCreated, events });
   return new Promise((resolve) => {
     server.listen(port, () => {
       const addr = server.address();

@@ -48,6 +48,7 @@ export function registerCollectionRoutes(router) {
       const patch = {};
       if ('name' in body) patch.name = body.name;
       if ('parentId' in body) patch.parentId = body.parentId; // null = move to root
+      if ('visibility' in body) patch.visibility = body.visibility; // 'private' | 'public'
       const collection = updateCollection(ctx.db, id, patch);
       ctx.events?.emit('change', { type: 'collections' });
       sendJson(res, 200, { collection });

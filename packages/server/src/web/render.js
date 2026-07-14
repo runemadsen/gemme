@@ -179,9 +179,10 @@ function cardInner(item) {
   </div>`;
 }
 
-export function renderDetail({ user, file, metadata }) {
+export function renderDetail({ user, file, metadata, isPublic = false }) {
   const current = file.versions.find((v) => v.is_current);
   const name = file.original_filename;
+  const isImage = categorize(current?.mime_type, name) === 'image';
   // Version-pinned URLs: served `immutable` in production, and switch
   // automatically when a new version becomes current.
   let preview = '';
@@ -210,6 +211,26 @@ export function renderDetail({ user, file, metadata }) {
     )
     .join('');
 
+  // Public files (in a public collection) get a stable, unauthenticated URL.
+  // Images also get resize/reformat variants (width + format via the URL).
+  const publicSection = isPublic
+    ? `<h2>Public URL</h2>
+  <p class="sub">This file is public — anyone can load the latest version at:</p>
+  <p><code class="url">/i/${file.id}</code></p>
+  ${
+    isImage
+      ? `<p class="sub">Resized / reformatted variants (drop into <code>srcset</code>):</p>
+  <pre class="snippet">${escapeHtml(
+    `<img
+  src="/i/${file.id}/w=800.webp"
+  srcset="/i/${file.id}/w=400.webp 400w, /i/${file.id}/w=800.webp 800w, /i/${file.id}/w=1600.webp 1600w"
+  sizes="(max-width: 800px) 100vw, 800px"
+  alt="">`
+  )}</pre>`
+      : ''
+  }`
+    : '';
+
   return layout({
     title: file.original_filename,
     user,
@@ -224,6 +245,7 @@ export function renderDetail({ user, file, metadata }) {
   <table class="metadata"><thead><tr><th>Key</th><th>Value</th><th>Source</th></tr></thead><tbody>${metaRows}</tbody></table>
   <h2>Collections</h2>
   <gemme-file-collections data-file="${file.id}"></gemme-file-collections>
+  ${publicSection}
 </section>`,
   });
 }
@@ -249,7 +271,7 @@ export function renderCollectionsPage({ user }) {
     nav: 'collections',
     body: `<section class="detail">
   <h1>Collections</h1>
-  <p class="sub">Group files into a nestable tree. Deleting a collection removes its sub-collections too; files are never deleted.</p>
+  <p class="sub">Group files into a nestable tree. Deleting a collection removes its sub-collections too; files are never deleted. Making a collection <strong>public</strong> serves every file in it — and in its sub-collections — at <code>/i/:id</code> without a login.</p>
   <gemme-collection-manager></gemme-collection-manager>
 </section>`,
   });

@@ -1,27 +1,24 @@
 import { writeExtraction } from '../lib/metadata/store.js';
 import { coreMetadata } from '../lib/metadata/core.js';
-
-/** Default thumbnail spec handed to plugins. Kept consistent across filetypes. */
-export const DEFAULT_THUMBNAIL_TARGET = { maxEdge: 512, format: 'webp' };
+import { rendererFor, getRendition, thumbnailSpec, specFromString } from '../lib/renditions.js';
 
 /**
- * Extract metadata for a single version: always records base "core" metadata,
- * then runs every matching plugin and merges their output. Each plugin's
- * failure is isolated — it's recorded but never blocks the others or the file.
+ * Extract metadata for a single version, then pre-generate its renditions.
  *
- * Plugins run in registry order and each receives `prior` — the metadata
- * accumulated so far plus whether a thumbnail has already been produced — so a
- * later plugin can skip work the first one already did (e.g. thumbnails: first
- * producer wins, the rest see `prior.thumbnail === true` and skip).
+ * 1. Always records base "core" metadata, then runs every matching plugin's
+ *    `extract` and merges the output (each plugin's failure is isolated).
+ * 2. Pre-generates renditions via the file's renderer (if any): the renderer's
+ *    `thumbnail` preset plus any configured `renditions.pregenerate` specs. The
+ *    thumbnail's content type is recorded on the version (`thumbnail_type`) so
+ *    the grid can render cheaply. Thumbnails are ordinary renditions — served
+ *    and cached exactly like public on-the-fly transforms.
  *
- * If a thumbnail is produced and the context has a `derivedStore`, it is written
- * there (keyed by content hash) and the version's `thumbnail_type` is recorded.
- * Extraction is per-version and replaces prior results, so it is safe to re-run.
+ * Idempotent per version, so it is safe to re-run.
  *
  * @returns {{ok:boolean, thumbnail:boolean, pluginErrors:Array<{plugin:string,message:string}>}}
  */
 export async function runExtraction(db, ctx, versionId) {
-  const { blobStore, registry, derivedStore, thumbnailTarget = DEFAULT_THUMBNAIL_TARGET } = ctx;
+  const { blobStore, registry } = ctx;
 
   const version = db
     .prepare(
@@ -51,46 +48,67 @@ export async function runExtraction(db, ctx, versionId) {
   });
   const fulltextParts = [];
   const pluginErrors = [];
-  // Only offer a thumbnail target when we can actually persist the result.
-  const target = derivedStore ? thumbnailTarget : null;
-  let thumbnail = null;
 
   for (const plugin of registry.matching(mimeType, filename)) {
     try {
-      const result =
-        (await plugin.extract({
-          buffer,
-          mimeType,
-          filename,
-          thumbnailTarget: target,
-          prior: { thumbnail: Boolean(thumbnail), metadata: entries.slice() },
-        })) || {};
+      const result = (await plugin.extract({ buffer, mimeType, filename })) || {};
       for (const m of result.metadata || []) {
         entries.push({ ...m, source: plugin.id });
       }
       if (result.fulltext) fulltextParts.push(result.fulltext);
-      // First plugin to return a valid thumbnail wins.
-      if (!thumbnail && isThumbnail(result.thumbnail)) thumbnail = result.thumbnail;
     } catch (err) {
       pluginErrors.push({ plugin: plugin.id, message: err.message });
     }
   }
 
-  if (thumbnail && derivedStore) {
-    await derivedStore.putThumb(version.content_hash, thumbnail.contentType, thumbnail.data);
-  }
+  const thumbnailType = await pregenerateRenditions(ctx, version, mimeType, filename, pluginErrors);
 
   writeExtraction(db, {
     versionId,
     filename,
     entries,
     fulltext: fulltextParts.join('\n'),
-    thumbnailType: thumbnail ? thumbnail.contentType : null,
+    thumbnailType,
   });
 
-  return { ok: true, thumbnail: Boolean(thumbnail), pluginErrors };
+  return { ok: true, thumbnail: Boolean(thumbnailType), pluginErrors };
 }
 
-function isThumbnail(t) {
-  return t && Buffer.isBuffer(t.data) && typeof t.contentType === 'string' && t.data.length > 0;
+/**
+ * Pre-generate the thumbnail preset + any configured extra renditions into the
+ * derived store. Returns the thumbnail rendition's content type (for
+ * `thumbnail_type`), or null when there's no renderer / it can't render.
+ * Per-rendition failures are recorded but never fail extraction.
+ */
+async function pregenerateRenditions(ctx, version, mimeType, filename, pluginErrors) {
+  const { derivedStore, registry, renditions } = ctx;
+  if (!derivedStore) return null; // nowhere to persist
+  const renderer = rendererFor(registry, mimeType, filename);
+  if (!renderer) return null;
+
+  const source = { contentHash: version.content_hash, mimeType, filename };
+  let thumbnailType = null;
+
+  // The thumbnail preset first (so its content type is known), then config extras.
+  const jobs = [{ ...thumbnailSpec(renderer), isThumb: true }];
+  for (const str of renditions?.pregenerate ?? []) {
+    try {
+      jobs.push({ ...specFromString(renderer, str), isThumb: false });
+    } catch (err) {
+      pluginErrors.push({ plugin: 'renderer', message: `bad rendition spec: ${err.message}` });
+    }
+  }
+
+  for (const job of jobs) {
+    try {
+      if (!renderer.formats.includes(job.ext)) throw new Error(`unsupported output format: ${job.ext}`);
+      const out = await getRendition(ctx, source, renderer, job.spec, job.ext);
+      if (job.isThumb) thumbnailType = out.contentType;
+    } catch (err) {
+      pluginErrors.push({ plugin: 'renderer', message: `pregenerate failed: ${err.message}` });
+    }
+  }
+  return thumbnailType;
 }
+
+export { pregenerateRenditions };

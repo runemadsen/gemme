@@ -7,7 +7,10 @@ import { HttpError } from '../server/respond.js';
  */
 
 export function getCollection(db, id) {
-  return db.prepare('SELECT id, name, parent_id, created_at, updated_at FROM collections WHERE id = ?').get(id) ?? null;
+  return (
+    db.prepare('SELECT id, name, parent_id, visibility, created_at, updated_at FROM collections WHERE id = ?').get(id) ??
+    null
+  );
 }
 
 /**
@@ -16,7 +19,9 @@ export function getCollection(db, id) {
  */
 export function listCollections(db) {
   const rows = db
-    .prepare('SELECT id, name, parent_id, created_at, updated_at FROM collections ORDER BY name COLLATE NOCASE, id')
+    .prepare(
+      'SELECT id, name, parent_id, visibility, created_at, updated_at FROM collections ORDER BY name COLLATE NOCASE, id'
+    )
     .all();
   const counts = new Map(
     db
@@ -61,8 +66,8 @@ export function createCollection(db, { name, parentId = null, userId = null }) {
   }
 }
 
-/** Rename and/or move a collection. Moving rebuilds the subtree's closure. */
-export function updateCollection(db, id, { name, parentId } = {}) {
+/** Rename, move, and/or set visibility. Moving rebuilds the subtree's closure. */
+export function updateCollection(db, id, { name, parentId, visibility } = {}) {
   const current = getCollection(db, id);
   if (!current) throw new HttpError(404, 'Collection not found');
 
@@ -72,6 +77,13 @@ export function updateCollection(db, id, { name, parentId } = {}) {
       const trimmed = String(name).trim();
       if (!trimmed) throw new HttpError(400, 'Collection name is required');
       db.prepare('UPDATE collections SET name = ?, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') WHERE id = ?').run(trimmed, id);
+    }
+
+    if (visibility !== undefined) {
+      if (visibility !== 'private' && visibility !== 'public') {
+        throw new HttpError(400, "visibility must be 'private' or 'public'");
+      }
+      db.prepare('UPDATE collections SET visibility = ?, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') WHERE id = ?').run(visibility, id);
     }
 
     if (parentId !== undefined && parentId !== current.parent_id) {
@@ -163,6 +175,24 @@ export function removeFilesFromCollection(db, collectionId, fileIds) {
     db.exec('ROLLBACK');
     throw err;
   }
+}
+
+/**
+ * Is this file publicly visible? True when it belongs to any collection whose
+ * ancestor (incl. itself) is public — i.e. public cascades down the subtree.
+ * Uses the closure table, mirroring the descendant-inclusive collection filter.
+ */
+export function isFilePublic(db, fileId) {
+  return !!db
+    .prepare(
+      `SELECT 1
+         FROM file_collections fc
+         JOIN collection_closure cc ON cc.descendant = fc.collection_id
+         JOIN collections anc ON anc.id = cc.ancestor
+        WHERE fc.file_id = ? AND anc.visibility = 'public'
+        LIMIT 1`
+    )
+    .get(fileId);
 }
 
 /** Collection ids an file belongs to (direct membership). */

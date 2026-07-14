@@ -4,15 +4,18 @@ import path from 'node:path';
 import { openDatabase } from '../../src/lib/db/index.js';
 import { createApp } from '../../src/server/index.js';
 import { createEventBus } from '../../src/lib/bus.js';
+import { fakeRegistry } from './plugins.js';
 
 /**
  * Boot an ephemeral app on a random port backed by a temp data directory.
- * Returns a client bound to that server plus a teardown function.
+ * Returns a client bound to that server plus a teardown function. A fake plugin
+ * registry (with a fake image renderer) is wired in so rendition/thumbnail
+ * routes work without the real plugin packages.
  */
-export async function startTestApp({ onVersionCreated, events = createEventBus(), dev = false } = {}) {
+export async function startTestApp({ onVersionCreated, events = createEventBus(), dev = false, registry = fakeRegistry() } = {}) {
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-test-'));
   const db = openDatabase({ dataDir });
-  const server = createApp({ db, dataDir, onVersionCreated, events, dev });
+  const server = createApp({ db, dataDir, onVersionCreated, events, dev, registry });
   await new Promise((resolve) => server.listen(0, resolve));
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;

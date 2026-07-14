@@ -278,8 +278,9 @@ async function cmdStart(argv) {
   // Load the instance's plugins from its config before touching the DB, so a
   // missing/broken config fails fast with a clear message.
   let registry;
+  let config;
   try {
-    ({ registry } = await loadPluginRegistry(dataDir));
+    ({ registry, config } = await loadPluginRegistry(dataDir));
   } catch (err) {
     if (err.code === 'NO_CONFIG') throw new Error(err.message);
     throw new Error(`Failed to load ${CONFIG_FILENAME}: ${err.message}`);
@@ -290,7 +291,7 @@ async function cmdStart(argv) {
   // One event bus shared by the worker (emits on extraction) and the server's
   // SSE endpoint (forwards to browsers), so the UI updates without a refresh.
   const events = createEventBus();
-  const worker = new ExtractionWorker(db, { dataDir, registry, events });
+  const worker = new ExtractionWorker(db, { dataDir, registry, renditions: config.renditions, events });
   worker.start();
   console.log(`Plugins: ${registry.plugins.map((p) => p.id).join(', ') || '(none)'}`);
 
@@ -301,6 +302,7 @@ async function cmdStart(argv) {
     port,
     dataDir,
     dev,
+    registry,
     events,
     onVersionCreated: (versionId) => worker.enqueue(versionId),
   });

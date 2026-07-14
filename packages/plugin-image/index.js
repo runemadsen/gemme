@@ -1,12 +1,14 @@
 import { definePlugin } from '@gemme/plugin-api';
 import exifr from 'exifr';
-import { IMAGE_MIME, IMAGE_EXT, RAW_EXT, EXIF_MAP } from './constants.js';
-import { imageSize, pushDimensions, rafPreview, embeddedPreview, makeThumbnail } from './utils.js';
+import { IMAGE_MIME, IMAGE_EXT, RAW_EXT, EXIF_MAP, RENDER_FORMATS, MAX_EDGE } from './constants.js';
+import { imageSize, pushDimensions, rafPreview, embeddedPreview, renderImage } from './utils.js';
 
 /**
- * Image plugin factory. Combines two extractors:
- *   - dimensions: parsed from file headers (zero dependency), always on;
- *   - EXIF: camera/lens/exposure/date/GPS via `exifr`, on by default.
+ * Image plugin factory. Provides:
+ *   - `extract`: dimensions (header parse) + EXIF (camera/lens/exposure/date/GPS);
+ *   - `renderer`: resize/reformat for the core rendition engine (thumbnails +
+ *     public serving). sharp can't decode RAW, so `run` first pulls the embedded
+ *     JPEG preview (Fuji RAF header, or exifr's thumbnail for TIFF-based RAW).
  *
  * @param {object} [options]
  * @param {boolean} [options.exif=true] - extract EXIF tags
@@ -21,7 +23,7 @@ export default function imagePlugin(options = {}) {
     matches(mimeType, filename) {
       return IMAGE_MIME.test(mimeType || '') || IMAGE_EXT.test(filename || '') || RAW_EXT.test(filename || '');
     },
-    async extract({ buffer, filename, thumbnailTarget, prior }) {
+    async extract({ buffer, filename }) {
       const metadata = [];
       const isRaw = RAW_EXT.test(filename || '');
 
@@ -59,16 +61,53 @@ export default function imagePlugin(options = {}) {
         }
       }
 
-      // Generate a thumbnail only if one is wanted and no earlier plugin made one.
-      // sharp can't decode RAW, so feed it an embedded JPEG preview: the RAF one
-      // we already sliced, else the (smaller) exifr thumbnail for TIFF-based RAW.
-      let thumbnail;
-      if (thumbnailTarget && !prior?.thumbnail) {
-        const source = isRaw ? rafJpeg || (await embeddedPreview(buffer)) : buffer;
-        if (source) thumbnail = await makeThumbnail(source, thumbnailTarget);
-      }
+      return { metadata };
+    },
 
-      return thumbnail ? { metadata, thumbnail } : { metadata };
+    // Rendition capability used by the core engine (see server lib/renditions.js).
+    renderer: {
+      formats: RENDER_FORMATS,
+      thumbnail: { width: 512, format: 'webp' },
+      // Validate + clamp raw URL params into a canonical spec (the cache key).
+      // Deterministic key order: width, height, fit, quality.
+      normalize(params) {
+        const spec = {};
+        const width = clampInt(params.w, 1, MAX_EDGE);
+        const height = clampInt(params.h, 1, MAX_EDGE);
+        if (width) spec.width = width;
+        if (height) spec.height = height;
+        if (params.fit != null) {
+          if (!['cover', 'contain', 'inside'].includes(params.fit)) {
+            throw new Error(`invalid fit: ${params.fit}`);
+          }
+          spec.fit = params.fit;
+        }
+        const quality = clampInt(params.q, 1, 100);
+        if (quality) spec.quality = quality;
+        return spec;
+      },
+      // Produce the bytes. Decode via the embedded preview for RAW, else directly.
+      async run(source, spec) {
+        let buf = source.buffer;
+        if (RAW_EXT.test(source.filename || '')) {
+          buf = rafPreview(source.buffer) || (await embeddedPreview(source.buffer));
+          if (!buf) return null;
+        }
+        return renderImage(buf, {
+          width: spec.width,
+          height: spec.height,
+          fit: spec.fit,
+          quality: spec.quality,
+          format: spec.format,
+        });
+      },
     },
   });
+}
+
+/** Parse an integer param and clamp to [min,max]; undefined if not a number. */
+function clampInt(value, min, max) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(max, Math.max(min, n));
 }

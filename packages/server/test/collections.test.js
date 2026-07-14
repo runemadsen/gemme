@@ -13,6 +13,7 @@ import {
   addFilesToCollection,
   removeFilesFromCollection,
   getFileCollectionIds,
+  isFilePublic,
 } from '../src/lib/collections.js';
 
 function seedUser(db) {
@@ -99,6 +100,33 @@ test('membership add/remove is idempotent and queryable', () => {
   assert.deepEqual(getFileCollectionIds(db, x.id), [a.id]);
   removeFileFromCollection(db, x.id, a.id);
   assert.deepEqual(getFileCollectionIds(db, x.id), []);
+  db.close();
+});
+
+test('visibility: isFilePublic true via direct or ancestor public; validated', () => {
+  const db = openMemoryDatabase();
+  const userId = seedUser(db);
+  const a = createCollection(db, { name: 'A' });
+  const b = createCollection(db, { name: 'B', parentId: a.id });
+  const other = createCollection(db, { name: 'Other' });
+  const inB = file(db, userId, 'inB.txt');
+  const inOther = file(db, userId, 'o.txt');
+  addFileToCollection(db, inB.id, b.id);
+  addFileToCollection(db, inOther.id, other.id);
+
+  assert.equal(isFilePublic(db, inB.id), false, 'private by default');
+
+  // Making the ANCESTOR public cascades to files in the child collection.
+  assert.equal(updateCollection(db, a.id, { visibility: 'public' }).visibility, 'public');
+  assert.equal(isFilePublic(db, inB.id), true);
+  assert.equal(isFilePublic(db, inOther.id), false, 'unrelated private collection stays private');
+
+  // Direct membership in a public collection.
+  const inA = file(db, userId, 'a.txt');
+  addFileToCollection(db, inA.id, a.id);
+  assert.equal(isFilePublic(db, inA.id), true);
+
+  assert.throws(() => updateCollection(db, a.id, { visibility: 'bogus' }), /visibility/);
   db.close();
 });
 

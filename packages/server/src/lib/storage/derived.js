@@ -10,45 +10,46 @@ const TYPE_EXT = {
   'image/avif': 'avif',
 };
 
-/** File extension for a thumbnail content type. */
+/** File extension for a rendition content type. */
 export function extForType(contentType) {
   return TYPE_EXT[contentType] || 'bin';
 }
 
 /**
- * Store for derived artifacts (currently thumbnails). Parallels the blob store:
- * artifacts are keyed by the *source* version's content hash, so identical
- * files share one derived artifact and a thumbnail is naturally tied to the
- * exact bytes it was generated from.
+ * Store for derived artifacts — image **renditions** (resized/reformatted
+ * variants, of which the thumbnail is just one). Parallels the blob store:
+ * variants are keyed by the *source* version's content hash plus a `sig`
+ * (a canonical hash of the transform) and the output extension, so identical
+ * source bytes + identical transform share one file and are naturally tied to
+ * the exact bytes they were generated from — even across collections.
  *
- *   <dataDir>/derived/<aa>/<bb>/<hash>.thumb.<ext>
+ *   <dataDir>/derived/<aa>/<bb>/<hash>.<sig>.<ext>
  */
 export class DerivedStore {
   constructor(dataDir) {
     this.root = path.join(dataDir, 'derived');
   }
 
-  thumbPath(hash, contentType) {
-    const ext = extForType(contentType);
-    return path.join(this.root, hash.slice(0, 2), hash.slice(2, 4), `${hash}.thumb.${ext}`);
+  variantPath(hash, sig, ext) {
+    return path.join(this.root, hash.slice(0, 2), hash.slice(2, 4), `${hash}.${sig}.${ext}`);
   }
 
-  hasThumb(hash, contentType) {
-    return fs.existsSync(this.thumbPath(hash, contentType));
+  hasVariant(hash, sig, ext) {
+    return fs.existsSync(this.variantPath(hash, sig, ext));
   }
 
-  /** fs.Stats for a thumbnail (size + mtime feed a cache validator). */
-  statThumb(hash, contentType) {
-    return fs.statSync(this.thumbPath(hash, contentType));
+  /** fs.Stats for a variant (size + mtime feed a cache validator). */
+  statVariant(hash, sig, ext) {
+    return fs.statSync(this.variantPath(hash, sig, ext));
   }
 
-  async putThumb(hash, contentType, buffer) {
-    const dest = this.thumbPath(hash, contentType);
+  async putVariant(hash, sig, ext, buffer) {
+    const dest = this.variantPath(hash, sig, ext);
     await fsp.mkdir(path.dirname(dest), { recursive: true });
     const tmp = `${dest}.tmp-${crypto.randomUUID()}`;
     try {
       await fsp.writeFile(tmp, buffer);
-      await fsp.rename(tmp, dest);
+      await fsp.rename(tmp, dest); // atomic; concurrent identical writes are safe
     } catch (err) {
       await fsp.rm(tmp, { force: true });
       throw err;
@@ -56,7 +57,7 @@ export class DerivedStore {
     return dest;
   }
 
-  createThumbReadStream(hash, contentType) {
-    return fs.createReadStream(this.thumbPath(hash, contentType));
+  createVariantReadStream(hash, sig, ext) {
+    return fs.createReadStream(this.variantPath(hash, sig, ext));
   }
 }

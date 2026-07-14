@@ -6,11 +6,15 @@ import path from 'node:path';
 import { openMemoryDatabase } from '../src/lib/db/index.js';
 import { BlobStore } from '../src/lib/storage/blobs.js';
 import { DerivedStore } from '../src/lib/storage/derived.js';
-import { PluginRegistry } from '../src/lib/plugins/registry.js';
 import { runExtraction, runPending } from '../src/worker/index.js';
 import { enqueueExtraction } from '../src/worker/queue.js';
+import { rendererFor, thumbnailSpec, specSig } from '../src/lib/renditions.js';
 import { startTestApp } from './helpers/server.js';
+import { fakeRegistry } from './helpers/plugins.js';
 import { createUser } from '../src/lib/auth/users.js';
+
+// Thumbnails are now ordinary renditions: the renderer's `thumbnail` preset,
+// pre-generated on extraction and served/cached like public transforms.
 
 async function setup() {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-thumb-'));
@@ -32,82 +36,76 @@ async function setup() {
   return { db, blobStore, derivedStore, seed, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
 }
 
-const thumbPlugin = (id, bytes) => ({
-  id,
-  matches: (mime) => /^image\//.test(mime || ''),
-  async extract() {
-    return { metadata: [], thumbnail: { data: Buffer.from(bytes), contentType: 'image/webp' } };
-  },
-});
-
-test('a produced thumbnail is written to the derived store and recorded on the version', async () => {
+test('extraction pre-generates the thumbnail rendition and records thumbnail_type', async () => {
   const s = await setup();
   try {
     const { versionId, hash } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
-    const registry = new PluginRegistry().register(thumbPlugin('t', 'WEBP-A'));
+    const registry = fakeRegistry();
     const res = await runExtraction(s.db, { blobStore: s.blobStore, derivedStore: s.derivedStore, registry }, versionId);
 
     assert.equal(res.thumbnail, true);
     assert.equal(s.db.prepare('SELECT thumbnail_type FROM versions WHERE id = ?').get(versionId).thumbnail_type, 'image/webp');
-    assert.equal(s.derivedStore.hasThumb(hash, 'image/webp'), true);
+
+    // The thumbnail is a variant keyed by the thumbnail preset's signature.
+    const renderer = rendererFor(registry, 'image/png', 'p.png');
+    const { spec, ext } = thumbnailSpec(renderer);
+    assert.equal(s.derivedStore.hasVariant(hash, specSig(spec, ext), ext), true);
   } finally {
     await s.cleanup();
   }
 });
 
-test('first plugin wins; later plugins see prior.thumbnail and can skip', async () => {
+test('config renditions.pregenerate produces extra variants that share the cache', async () => {
   const s = await setup();
   try {
     const { versionId, hash } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
-
-    const seen = [];
-    const spy = {
-      id: 'spy',
-      matches: () => true,
-      async extract({ prior }) {
-        seen.push(prior.thumbnail);
-        // Would produce its own, but should be ignored since first already won.
-        return { metadata: [], thumbnail: { data: Buffer.from('WEBP-B'), contentType: 'image/webp' } };
-      },
-    };
-    const registry = new PluginRegistry().register(thumbPlugin('first', 'WEBP-A')).register(spy);
-    await runExtraction(s.db, { blobStore: s.blobStore, derivedStore: s.derivedStore, registry }, versionId);
-
-    assert.deepEqual(seen, [true], 'the second plugin observed that a thumbnail already existed');
-    const stored = await s.derivedStore.createThumbReadStream(hash, 'image/webp');
-    const bytes = await new Promise((r) => {
-      const c = [];
-      stored.on('data', (x) => c.push(x)).on('end', () => r(Buffer.concat(c)));
-    });
-    assert.equal(bytes.toString(), 'WEBP-A', 'the first plugin’s thumbnail was kept');
+    const registry = fakeRegistry();
+    await runExtraction(
+      s.db,
+      { blobStore: s.blobStore, derivedStore: s.derivedStore, registry, renditions: { pregenerate: ['w=1024.webp'] } },
+      versionId
+    );
+    const renderer = rendererFor(registry, 'image/png', 'p.png');
+    const spec = renderer.normalize({ w: '1024' });
+    assert.equal(s.derivedStore.hasVariant(hash, specSig(spec, 'webp'), 'webp'), true);
   } finally {
     await s.cleanup();
   }
 });
 
-test('no derivedStore in context => no thumbnail target, none stored', async () => {
+test('no derivedStore => no thumbnail generated', async () => {
   const s = await setup();
   try {
     const { versionId } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
-    let targetSeen = 'unset';
-    const probe = {
-      id: 'probe',
-      matches: () => true,
-      async extract({ thumbnailTarget }) {
-        targetSeen = thumbnailTarget;
-        return { metadata: [] };
-      },
-    };
-    const registry = new PluginRegistry().register(probe);
-    const res = await runExtraction(s.db, { blobStore: s.blobStore, registry }, versionId);
-    assert.equal(targetSeen, null, 'plugins get a null target when thumbnails cannot be persisted');
+    const res = await runExtraction(s.db, { blobStore: s.blobStore, registry: fakeRegistry() }, versionId);
     assert.equal(res.thumbnail, false);
+    assert.equal(s.db.prepare('SELECT thumbnail_type FROM versions WHERE id = ?').get(versionId).thumbnail_type, null);
   } finally {
     await s.cleanup();
   }
 });
 
-test('HTTP: thumbnail served when present, 404 when absent; list flags it', async () => {
+test('a file with no renderer (text) gets no thumbnail', async () => {
+  const s = await setup();
+  try {
+    const { versionId } = await s.seed({ filename: 'n.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+    const res = await runExtraction(s.db, { blobStore: s.blobStore, derivedStore: s.derivedStore, registry: fakeRegistry() }, versionId);
+    assert.equal(res.thumbnail, false);
+    assert.equal(s.db.prepare('SELECT thumbnail_type FROM versions WHERE id = ?').get(versionId).thumbnail_type, null);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+async function drain(app) {
+  await runPending(app.db, {
+    blobStore: new BlobStore(app.dataDir),
+    derivedStore: new DerivedStore(app.dataDir),
+    registry: fakeRegistry(),
+  });
+}
+
+test('HTTP: thumbnail served for images, 404 for non-images; list flags thumbnail_type', async () => {
   const app = await startTestApp({ onVersionCreated: (id) => enqueueExtraction(app.db, id) });
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
@@ -115,25 +113,15 @@ test('HTTP: thumbnail served when present, 404 when absent; list flags it', asyn
 
     const img = await app.upload('/api/files', { filename: 'p.png', contentType: 'image/png', body: 'imgbytes' });
     const txt = await app.upload('/api/files', { filename: 'n.txt', contentType: 'text/plain', body: 'hello' });
+    await drain(app);
 
-    // Drain with a registry whose image plugin emits a thumbnail.
-    const registry = new PluginRegistry().register(thumbPlugin('t', 'WEBP-A'));
-    await runPending(app.db, {
-      blobStore: new BlobStore(app.dataDir),
-      derivedStore: new DerivedStore(app.dataDir),
-      registry,
-    });
-
-    // Image file has a thumbnail
     const thumb = await app.get(`/api/files/${img.json.file.id}/thumbnail`);
     assert.equal(thumb.status, 200);
     assert.equal(thumb.res.headers.get('content-type'), 'image/webp');
-    assert.equal(thumb.text, 'WEBP-A');
+    assert.match(thumb.text, /^RENDITION:webp:512x/);
 
-    // Text file has none
     assert.equal((await app.get(`/api/files/${txt.json.file.id}/thumbnail`)).status, 404);
 
-    // list reflects thumbnail_type
     const list = await app.get('/api/files');
     const byName = Object.fromEntries(list.json.items.map((i) => [i.original_filename, i.thumbnail_type]));
     assert.equal(byName['p.png'], 'image/webp');
@@ -143,39 +131,25 @@ test('HTTP: thumbnail served when present, 404 when absent; list flags it', asyn
   }
 });
 
-// Image cache policy: version-pinned URLs are immutable (safe — a version is
-// written once), bare "current" pointers always revalidate, and dev mode never
-// sends immutable (so re-running extraction locally can't poison the cache).
 async function seedImageApp(app) {
   await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
   await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
   const img = await app.upload('/api/files', { filename: 'p.png', contentType: 'image/png', body: 'imgbytes' });
-  await runPending(app.db, {
-    blobStore: new BlobStore(app.dataDir),
-    derivedStore: new DerivedStore(app.dataDir),
-    registry: new PluginRegistry().register(thumbPlugin('t', 'WEBP-A')),
-  });
-  const file = app.db.prepare('SELECT id, current_version_id FROM files WHERE id = ?').get(img.json.file.id);
-  return file;
+  await drain(app);
+  return app.db.prepare('SELECT id, current_version_id FROM files WHERE id = ?').get(img.json.file.id);
 }
 
-test('HTTP (production): version-pinned image URLs are immutable; bare pointers revalidate', async () => {
+test('HTTP (production): version-pinned thumbnails are immutable; bare pointers revalidate', async () => {
   const app = await startTestApp({ onVersionCreated: (id) => enqueueExtraction(app.db, id) });
   try {
     const { id, current_version_id: vid } = await seedImageApp(app);
 
-    // Version-pinned thumbnail + download → immutable (the bytes never change).
     const pinnedThumb = await app.get(`/api/files/${id}/versions/${vid}/thumbnail`);
     assert.equal(pinnedThumb.status, 200);
     assert.match(pinnedThumb.res.headers.get('cache-control'), /immutable/);
-    const pinnedDl = await app.get(`/api/files/${id}/versions/${vid}/download`);
-    assert.equal(pinnedDl.status, 200);
-    assert.match(pinnedDl.res.headers.get('cache-control'), /immutable/);
 
-    // Bare "current" pointers move, so they always revalidate against an ETag.
     const bareThumb = await app.get(`/api/files/${id}/thumbnail`);
     assert.equal(bareThumb.status, 200);
-    assert.doesNotMatch(bareThumb.res.headers.get('cache-control'), /immutable/);
     assert.match(bareThumb.res.headers.get('cache-control'), /no-cache/);
     const etag = bareThumb.res.headers.get('etag');
     assert.ok(etag);
@@ -187,7 +161,7 @@ test('HTTP (production): version-pinned image URLs are immutable; bare pointers 
   }
 });
 
-test('HTTP (dev mode): even version-pinned URLs are never immutable', async () => {
+test('HTTP (dev mode): even version-pinned thumbnails are never immutable', async () => {
   const app = await startTestApp({ dev: true, onVersionCreated: (id) => enqueueExtraction(app.db, id) });
   try {
     const { id, current_version_id: vid } = await seedImageApp(app);

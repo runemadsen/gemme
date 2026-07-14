@@ -1,6 +1,8 @@
 import { sendJson, readJson, HttpError } from '../respond.js';
 import { requireAuth } from '../middleware.js';
 import { receiveUpload } from '../upload.js';
+import { rendererFor, thumbnailSpec } from '../../lib/renditions.js';
+import { streamRendition } from '../render-response.js';
 import {
   createFileWithVersion,
   addVersion,
@@ -149,23 +151,23 @@ export function registerFileRoutes(router) {
   // "Latest" pointer, so never immutable.
   router.get(
     '/api/files/:id/thumbnail',
-    requireAuth((req, res, ctx) => {
+    requireAuth(async (req, res, ctx) => {
       const id = intParam(ctx.params.id, 'file id');
       const file = getFile(ctx.db, id);
       const version = file?.versions.find((v) => v.id === file.current_version_id);
-      streamThumbnail(req, res, ctx, version, { pinned: false });
+      await serveThumbnail(req, res, ctx, file, version, { pinned: false });
     })
   );
 
   // Thumbnail for a specific version — version-pinned, so safely immutable.
   router.get(
     '/api/files/:id/versions/:vid/thumbnail',
-    requireAuth((req, res, ctx) => {
+    requireAuth(async (req, res, ctx) => {
       const id = intParam(ctx.params.id, 'file id');
       const vid = intParam(ctx.params.vid, 'version id');
       const file = getFile(ctx.db, id);
       const version = file?.versions.find((v) => v.id === vid);
-      streamThumbnail(req, res, ctx, version, { pinned: true });
+      await serveThumbnail(req, res, ctx, file, version, { pinned: true });
     })
   );
 }
@@ -194,24 +196,23 @@ function cacheControl(ctx, pinned) {
   return pinned && !ctx.dev ? 'public, max-age=31536000, immutable' : 'no-cache';
 }
 
-function streamThumbnail(req, res, ctx, version, { pinned } = {}) {
-  if (!version || !version.thumbnail_type) throw new HttpError(404, 'No thumbnail');
-  if (!ctx.derivedStore.hasThumb(version.content_hash, version.thumbnail_type)) {
-    throw new HttpError(404, 'No thumbnail');
-  }
-  // Derived bytes aren't content-addressed by themselves, so fold in the file's
-  // size + mtime — a re-extraction that rewrites the thumbnail busts the ETag
-  // (matters for the always-revalidated routes; immutable ones ignore it).
-  const stat = ctx.derivedStore.statThumb(version.content_hash, version.thumbnail_type);
-  const etag = `"${version.content_hash}-${stat.size}-${Math.floor(stat.mtimeMs)}"`;
-  const headers = { etag, 'cache-control': cacheControl(ctx, pinned) };
-  if (notModified(req, etag)) {
-    res.writeHead(304, headers);
-    res.end();
-    return;
-  }
-  res.writeHead(200, { ...headers, 'content-type': version.thumbnail_type });
-  ctx.derivedStore.createThumbReadStream(version.content_hash, version.thumbnail_type).pipe(res);
+/**
+ * Serve a version's thumbnail — the renderer's pre-generated `thumbnail` preset
+ * rendition (generated on demand if not yet cached). 404 when the file has no
+ * renderer (the UI falls back to a placeholder). Shares the rendition cache with
+ * public transforms of the same size.
+ */
+async function serveThumbnail(req, res, ctx, file, version, { pinned } = {}) {
+  if (!version) throw new HttpError(404, 'No thumbnail');
+  const renderer = rendererFor(ctx.registry, version.mime_type, file.original_filename);
+  if (!renderer) throw new HttpError(404, 'No thumbnail');
+  const { spec, ext } = thumbnailSpec(renderer);
+  const source = {
+    contentHash: version.content_hash,
+    mimeType: version.mime_type,
+    filename: file.original_filename,
+  };
+  await streamRendition(req, res, ctx, source, renderer, spec, ext, cacheControl(ctx, pinned));
 }
 
 function streamVersion(req, res, ctx, file, version, { pinned } = {}) {

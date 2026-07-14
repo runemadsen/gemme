@@ -14,6 +14,7 @@ export { ExtractionWorker, runExtraction, runPending, enqueueExtraction } from '
 export { getVersionMetadata } from './lib/metadata/store.js';
 export { searchFiles, paginatedSearch } from './lib/search/search.js';
 export { getFacet, getFacets } from './lib/facets.js';
+export { rendererFor, parseSpecSegment, specSig, getRendition, contentTypeForExt } from './lib/renditions.js';
 export {
   getCollection,
   listCollections,
@@ -25,6 +26,7 @@ export {
   addFilesToCollection,
   removeFilesFromCollection,
   getFileCollectionIds,
+  isFilePublic,
 } from './lib/collections.js';
 export { parseQuery, compileQuery, parseValue, tokenize, QueryError } from './lib/search/dsl.js';
 export {

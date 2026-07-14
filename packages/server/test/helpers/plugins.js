@@ -44,6 +44,34 @@ export function fakeRegistry() {
         ],
       };
     },
+    // Fake renderer for the rendition engine: no real decoding — just emits
+    // deterministic, format-tagged bytes so route/cache/visibility logic can be
+    // tested without sharp. (Real resizing is tested in @gemme/plugin-image.)
+    renderer: {
+      formats: ['webp', 'jpg', 'jpeg', 'png', 'avif'],
+      thumbnail: { width: 512, format: 'webp' },
+      normalize(params) {
+        const spec = {};
+        const w = Number.parseInt(params.w, 10);
+        const h = Number.parseInt(params.h, 10);
+        const q = Number.parseInt(params.q, 10);
+        if (Number.isFinite(w)) spec.width = Math.min(4096, Math.max(1, w));
+        if (Number.isFinite(h)) spec.height = Math.min(4096, Math.max(1, h));
+        if (params.fit != null) {
+          if (!['cover', 'contain', 'inside'].includes(params.fit)) throw new Error(`invalid fit: ${params.fit}`);
+          spec.fit = params.fit;
+        }
+        if (Number.isFinite(q)) spec.quality = Math.min(100, Math.max(1, q));
+        return spec;
+      },
+      async run(source, spec) {
+        const encoder = spec.format === 'jpg' ? 'jpeg' : spec.format;
+        return {
+          data: Buffer.from(`RENDITION:${encoder}:${spec.width ?? ''}x${spec.height ?? ''}`),
+          contentType: `image/${encoder}`,
+        };
+      },
+    },
   };
   return new PluginRegistry().register(text).register(image);
 }

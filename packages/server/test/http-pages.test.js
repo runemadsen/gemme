@@ -151,6 +151,31 @@ test('file detail page shows versions and metadata table', async () => {
   }
 });
 
+test('detail page shows a public URL + srcset snippet only when the file is public', async () => {
+  const app = await startTestApp();
+  try {
+    await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
+    await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
+    const up = await app.upload('/api/files', { filename: 'p.png', contentType: 'image/png', body: 'imgbytes' });
+    const id = up.json.file.id;
+
+    // Private: no public URL section.
+    assert.doesNotMatch((await app.get(`/files/${id}`)).text, /Public URL/);
+
+    // Put it in a public collection.
+    const c = (await app.post('/api/collections', { name: 'Pub' })).json.collection;
+    await app.post(`/api/collections/${c.id}/files`, { fileIds: [id] });
+    await app.req('PATCH', `/api/collections/${c.id}`, { body: { visibility: 'public' } });
+
+    const html = (await app.get(`/files/${id}`)).text;
+    assert.match(html, /Public URL/);
+    assert.match(html, new RegExp(`/i/${id}`));
+    assert.match(html, /srcset=/); // image → variant snippet
+  } finally {
+    await app.close();
+  }
+});
+
 test('home has the collections tree; /collections renders the manager; detail has membership', async () => {
   const app = await startTestApp();
   try {

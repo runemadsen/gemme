@@ -6,6 +6,7 @@ import { paginatedSearch } from '../../lib/search/search.js';
 import { resolveState, composeQuery } from '../../lib/search/compose.js';
 import { QueryError } from '../../lib/search/dsl.js';
 import { getFile } from '../../lib/files.js';
+import { isFilePublic } from '../../lib/collections.js';
 import { getVersionMetadata } from '../../lib/metadata/store.js';
 import {
   renderHome,
@@ -63,7 +64,8 @@ export function registerPageRoutes(router) {
     const metadata = file.current_version_id
       ? getVersionMetadata(ctx.db, file.current_version_id)
       : [];
-    sendHtml(res, 200, renderDetail({ user: ctx.user, file, metadata }));
+    const isPublic = isFilePublic(ctx.db, id);
+    sendHtml(res, 200, renderDetail({ user: ctx.user, file, metadata, isPublic }));
   });
 
   // Static files (flat directory, basename only — no traversal).

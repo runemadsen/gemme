@@ -739,10 +739,11 @@ function node(n, sel) {
   const hasKids = n.children.length > 0;
   const toggle = hasKids ? `<button class="ctoggle" type="button" aria-label="collapse">▾</button>` : `<span class="cspacer"></span>`;
   const kids = hasKids ? `<ul>${n.children.map((c) => node(c, sel)).join('')}</ul>` : '';
+  const pub = n.visibility === 'public' ? `<span class="pubdot" title="Public">●</span>` : '';
   return `<li>
     <div class="crow">${toggle}
       <label class="cname"><input type="checkbox" value="${esc(n.name)}" ${sel.has(n.name) ? 'checked' : ''}> <span>${esc(n.name)}</span></label>
-      <span class="count">${n.fileCount}</span>
+      ${pub}<span class="count">${n.fileCount}</span>
     </div>${kids}</li>`;
 }
 
@@ -818,9 +819,12 @@ class GemmeCollectionManager extends HTMLElement {
       `<option value="">(root)</option>` +
       this.list.filter((c) => c.id !== n.id).map((c) => `<option value="${c.id}" ${n.parent_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
     const kids = n.children.length ? `<ul>${n.children.map((c) => this.node(c)).join('')}</ul>` : '';
+    const isPublic = n.visibility === 'public';
+    const visBadge = isPublic ? `<span class="badge pub" title="Public — files reachable at /i/:id">public</span>` : '';
     return `<li><div class="crow manage">
-      <span class="cname">${esc(n.name)}</span><span class="count">${n.fileCount}</span>
+      <span class="cname">${esc(n.name)}</span>${visBadge}<span class="count">${n.fileCount}</span>
       <select data-move="${n.id}" title="Move to parent">${moveOpts}</select>
+      <button type="button" data-act="visibility" data-id="${n.id}" data-vis="${n.visibility}">${isPublic ? 'Make private' : 'Make public'}</button>
       <button type="button" data-act="rename" data-id="${n.id}">Rename</button>
       <button type="button" data-act="delete" data-id="${n.id}">Delete</button>
     </div>${kids}</li>`;
@@ -842,6 +846,18 @@ class GemmeCollectionManager extends HTMLElement {
     } else if (b.dataset.act === 'delete') {
       if (!confirm('Delete this collection and all its sub-collections? Files are not deleted.')) return;
       await fetch(`/api/collections/${id}`, { method: 'DELETE' });
+    } else if (b.dataset.act === 'visibility') {
+      const next = b.dataset.vis === 'public' ? 'private' : 'public';
+      if (
+        next === 'public' &&
+        !confirm('Make this collection public? Every file in it (and its sub-collections) becomes reachable at /i/:id without logging in.')
+      )
+        return;
+      await fetch(`/api/collections/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visibility: next }),
+      });
     }
     await this.load();
   }

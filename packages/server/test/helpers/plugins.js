@@ -60,14 +60,11 @@ export function fakeRegistry() {
         return Buffer.from('THUMB:image');
       },
     },
-    preview: (file, h) => {
-      let html = `<img src="${h.url.download()}" alt="">`;
-      if (h.isPublic) {
-        // Mirror the real plugin-image: a copyable srcset snippet for public images.
-        html += `<pre class="snippet">${h.escapeHtml(`srcset="${h.url.publicServe('w=800.webp')} 800w"`)}</pre>`;
-      }
-      return html;
-    },
+    preview: (file, h) => `<img src="${h.url.download()}" alt="">`,
+    // Mirror the real plugin-image: public "how to load" help lives in publicEmbed
+    // (the core injects it beneath the public URL), not in the visual preview.
+    publicEmbed: (file, h) =>
+      `<pre class="snippet">${h.escapeHtml(`srcset="${h.url.publicServe('w=800.webp')} 800w"`)}</pre>`,
     // Serving: the on-the-fly image transform service (deterministic tagged bytes,
     // no sharp) — exercises the extension-dispatch + variant-cache machinery.
     serving: {

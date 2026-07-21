@@ -1,5 +1,6 @@
 import exifr from 'exifr';
 import sharp from 'sharp';
+import { RAW_EXT, MAX_EDGE } from './constants.js';
 
 // ---- dimensions from file headers (zero-dependency) -----------------------
 
@@ -133,4 +134,52 @@ export async function renderImage(buffer, { width, height, fit = 'inside', quali
   } catch {
     return null; // undecodable — caller decides (skip thumbnail / 415)
   }
+}
+
+// ---- serving spec parsing --------------------------------------------------
+
+/** Bytes sharp can decode, from the source buffer or a RAW's embedded preview. */
+export async function decodableBuffer(source) {
+  const buf = await source.loadBuffer();
+  if (RAW_EXT.test(source.filename || '')) {
+    return rafPreview(buf) || (await embeddedPreview(buf));
+  }
+  return buf;
+}
+
+/**
+ * Parse a rendition spec segment like `w=800,fit=cover.webp` → raw params
+ * `{ w, h, fit, q }` (the extension is handled by the core dispatcher).
+ */
+export function parseSpecParams(segment) {
+  const base = segment.slice(0, segment.lastIndexOf('.'));
+  const params = {};
+  for (const tok of base.split(',')) {
+    const eq = tok.indexOf('=');
+    if (eq !== -1) params[tok.slice(0, eq)] = tok.slice(eq + 1);
+  }
+  return params;
+}
+
+/** Validate + clamp raw params into a canonical spec (the cache key). Throws on bad `fit`. */
+export function normalizeSpec(params) {
+  const spec = {};
+  const width = clampInt(params.w, 1, MAX_EDGE);
+  const height = clampInt(params.h, 1, MAX_EDGE);
+  if (width) spec.width = width;
+  if (height) spec.height = height;
+  if (params.fit != null) {
+    if (!['cover', 'contain', 'inside'].includes(params.fit)) throw new Error(`invalid fit: ${params.fit}`);
+    spec.fit = params.fit;
+  }
+  const quality = clampInt(params.q, 1, 100);
+  if (quality) spec.quality = quality;
+  return spec;
+}
+
+/** Parse an integer param and clamp to [min,max]; undefined if not a number. */
+function clampInt(value, min, max) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(max, Math.max(min, n));
 }

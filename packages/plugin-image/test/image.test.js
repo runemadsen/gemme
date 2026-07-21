@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
-import imagePlugin, { parseSpecParams, normalizeSpec } from '../index.js';
+import imagePlugin from '../index.js';
+import { parseSpecParams, normalizeSpec } from '../utils.js';
 
 // The core hands serving a `source` with a lazy `loadBuffer()` (see server
 // lib/serving.js `makeSource`). Mirror just that shape in tests.
@@ -114,6 +115,7 @@ const helpers = (isPublic = false) => ({
     download: () => '/api/files/9/download',
     thumbnail: () => '/api/files/9/thumbnail',
     publicServe: (spec) => `/i/9/${spec}`,
+    publicOriginal: () => '/i/9',
   },
 });
 
@@ -125,9 +127,17 @@ test('preview: web image points at the download; RAW uses the thumbnail', () => 
   assert.equal(p.preview({ id: 9, original_filename: 'x.arw', thumbnail_type: null }, helpers()), null);
 });
 
-test('preview: public image adds an srcset snippet', () => {
+test('preview holds only the visual element (no public embed help)', () => {
   const p = imagePlugin();
   const html = p.preview({ id: 9, original_filename: 'a.jpg' }, helpers(true));
+  assert.match(html, /src="\/api\/files\/9\/download"/);
+  assert.doesNotMatch(html, /srcset=/); // embed help lives in publicEmbed
+});
+
+test('publicEmbed: plain-original embed + srcset snippet', () => {
+  const p = imagePlugin();
+  const html = p.publicEmbed({ id: 9, original_filename: 'a.jpg' }, helpers(true));
+  assert.match(html, /<img src="\/i\/9" alt="">/); // plain original embed
   assert.match(html, /srcset=/);
   assert.match(html, /\/i\/9\/w=800\.webp/);
 });

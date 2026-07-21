@@ -37,5 +37,15 @@ test('preview renders a native <audio> element pointing at the download', () => 
   };
   const html = p.preview({ id: 5 }, h);
   assert.match(html, /<audio controls src="\/api\/files\/5\/download">/);
-  assert.match(html, /\/i\/5/); // public URL surfaced
+  assert.doesNotMatch(html, /\/i\/5/); // public embed help lives in publicEmbed
+});
+
+test('publicEmbed surfaces a copyable public <audio> snippet', () => {
+  const p = audioPlugin();
+  const h = {
+    escapeHtml: (s) => s,
+    url: { download: () => '/api/files/5/download', publicOriginal: () => '/i/5' },
+  };
+  const html = p.publicEmbed({ id: 5 }, h);
+  assert.match(html, /<audio controls src="\/i\/5"><\/audio>/);
 });

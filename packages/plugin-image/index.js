@@ -1,46 +1,15 @@
 import { definePlugin } from '@gemme/plugin-api';
 import exifr from 'exifr';
-import { IMAGE_MIME, IMAGE_EXT, RAW_EXT, WEB_IMAGE_EXT, EXIF_MAP, RENDER_FORMATS, MAX_EDGE } from './constants.js';
-import { imageSize, pushDimensions, rafPreview, embeddedPreview, renderImage } from './utils.js';
-
-/** Bytes sharp can decode, from the source buffer or a RAW's embedded preview. */
-async function decodableBuffer(source) {
-  const buf = await source.loadBuffer();
-  if (RAW_EXT.test(source.filename || '')) {
-    return rafPreview(buf) || (await embeddedPreview(buf));
-  }
-  return buf;
-}
-
-/**
- * Parse a rendition spec segment like `w=800,fit=cover.webp` → raw params
- * `{ w, h, fit, q }` (the extension is handled by the core dispatcher).
- */
-export function parseSpecParams(segment) {
-  const base = segment.slice(0, segment.lastIndexOf('.'));
-  const params = {};
-  for (const tok of base.split(',')) {
-    const eq = tok.indexOf('=');
-    if (eq !== -1) params[tok.slice(0, eq)] = tok.slice(eq + 1);
-  }
-  return params;
-}
-
-/** Validate + clamp raw params into a canonical spec (the cache key). Throws on bad `fit`. */
-export function normalizeSpec(params) {
-  const spec = {};
-  const width = clampInt(params.w, 1, MAX_EDGE);
-  const height = clampInt(params.h, 1, MAX_EDGE);
-  if (width) spec.width = width;
-  if (height) spec.height = height;
-  if (params.fit != null) {
-    if (!['cover', 'contain', 'inside'].includes(params.fit)) throw new Error(`invalid fit: ${params.fit}`);
-    spec.fit = params.fit;
-  }
-  const quality = clampInt(params.q, 1, 100);
-  if (quality) spec.quality = quality;
-  return spec;
-}
+import { IMAGE_MIME, IMAGE_EXT, RAW_EXT, WEB_IMAGE_EXT, EXIF_MAP, RENDER_FORMATS } from './constants.js';
+import {
+  imageSize,
+  pushDimensions,
+  rafPreview,
+  renderImage,
+  decodableBuffer,
+  parseSpecParams,
+  normalizeSpec,
+} from './utils.js';
 
 /**
  * Image plugin factory. Provides:
@@ -117,26 +86,29 @@ export default function imagePlugin(options = {}) {
       },
     },
 
-    // The detail-page preview HTML. Web formats render their bytes directly;
-    // RAW/other images fall back to the generated thumbnail (raw bytes won't
-    // display). Public images also get a copyable srcset snippet.
+    // The detail-page preview HTML (the visual only). Web formats render their
+    // bytes directly; RAW/other images fall back to the generated thumbnail (raw
+    // bytes won't display).
     preview(file, h) {
       const name = file.original_filename || '';
-      let html;
-      if (WEB_IMAGE_EXT.test(name)) html = `<img src="${h.url.download()}" alt="">`;
-      else if (file.thumbnail_type) html = `<img src="${h.url.thumbnail()}" alt="">`;
-      else return null;
+      if (WEB_IMAGE_EXT.test(name)) return `<img src="${h.url.download()}" alt="">`;
+      if (file.thumbnail_type) return `<img src="${h.url.thumbnail()}" alt="">`;
+      return null;
+    },
 
-      if (h.isPublic) {
-        const snippet = `<img
+    // "How to load" help for a public image, injected by the core beneath the
+    // public `/i/:id` URL: a copyable plain-original embed + resize/srcset snippet.
+    publicEmbed(file, h) {
+      const embed = `<img src="${h.url.publicOriginal()}" alt="">`;
+      const snippet = `<img
   src="${h.url.publicServe('w=800.webp')}"
   srcset="${h.url.publicServe('w=400.webp')} 400w, ${h.url.publicServe('w=800.webp')} 800w, ${h.url.publicServe('w=1600.webp')} 1600w"
   sizes="(max-width: 800px) 100vw, 800px"
   alt="">`;
-        html += `<p class="sub">Resized / reformatted variants (drop into <code>srcset</code>):</p>
+      return `<p class="sub">Embed the original:</p>
+<pre class="snippet">${h.escapeHtml(embed)}</pre>
+<p class="sub">Resized / reformatted variants (drop into <code>srcset</code>):</p>
 <pre class="snippet">${h.escapeHtml(snippet)}</pre>`;
-      }
-      return html;
     },
 
     // Serving capability: the public on-the-fly image resize/reformat service.
@@ -147,22 +119,12 @@ export default function imagePlugin(options = {}) {
         const spec = normalizeSpec(parseSpecParams(segments[segments.length - 1]));
         const encoder = ext === 'jpg' ? 'jpeg' : ext;
         return api.rendition({ spec }, ext, `image/${encoder}`, async () => {
-          let buf = await source.loadBuffer();
-          if (RAW_EXT.test(source.filename || '')) {
-            buf = rafPreview(buf) || (await embeddedPreview(buf));
-            if (!buf) return null;
-          }
+          const buf = await decodableBuffer(source);
+          if (!buf) return null;
           const out = await renderImage(buf, { ...spec, format: ext });
           return out ? out.data : null;
         });
       },
     },
   });
-}
-
-/** Parse an integer param and clamp to [min,max]; undefined if not a number. */
-function clampInt(value, min, max) {
-  const n = Number.parseInt(value, 10);
-  if (!Number.isFinite(n)) return undefined;
-  return Math.min(max, Math.max(min, n));
 }

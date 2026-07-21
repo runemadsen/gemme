@@ -72,11 +72,14 @@ export function registerPageRoutes(router) {
     if (!file) return sendHtml(res, 404, renderNotFound({ user: ctx.user }));
     const metadata = getFileMetadata(ctx.db, file.id);
     const isPublic = isFilePublic(ctx.db, id);
-    // The detail preview is owned by the plugin (core stays format-agnostic):
-    // ask the first matching plugin with a `preview` capability for its HTML.
-    const plugin = ctx.registry?.matching?.(file.mime_type, file.original_filename).find((p) => p.preview);
-    const preview = plugin ? plugin.preview(file, previewHelpers(plugin, file, { isPublic })) || '' : '';
-    sendHtml(res, 200, renderDetail({ user: ctx.user, file, metadata, isPublic, preview }));
+    // The detail preview + public-embed help are owned by the plugin (core stays
+    // format-agnostic): ask the first matching plugin with each capability.
+    const matches = ctx.registry?.matching?.(file.mime_type, file.original_filename) || [];
+    const previewPlugin = matches.find((p) => p.preview);
+    const preview = previewPlugin ? previewPlugin.preview(file, previewHelpers(previewPlugin, file, { isPublic })) || '' : '';
+    const embedPlugin = isPublic ? matches.find((p) => p.publicEmbed) : null;
+    const publicEmbed = embedPlugin ? embedPlugin.publicEmbed(file, previewHelpers(embedPlugin, file, { isPublic })) || '' : '';
+    sendHtml(res, 200, renderDetail({ user: ctx.user, file, metadata, isPublic, preview, publicEmbed }));
   });
 
   // Serve a plugin's own static `assets/` (player JS, hls.js, default images) so

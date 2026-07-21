@@ -27,9 +27,15 @@
  *   - `thumbnail = { contentType, async generate(source) -> Buffer|null }`
  *       The single pre-generated grid/detail image (worker-built, cached).
  *   - `preview(file, helpers) -> htmlString | null`
- *       The detail-page preview HTML. `helpers` = { escapeHtml, isPublic, url:{
+ *       The detail-page preview HTML (the visual element only — the `<img>` /
+ *       `<video>` / `<audio>`). `helpers` = { escapeHtml, isPublic, url:{
  *       download, thumbnail, hls, publicOriginal, publicHls, publicSpec, asset } }.
  *       `url.asset(name)` maps to this plugin's own shipped `assets/`.
+ *   - `publicEmbed(file, helpers) -> htmlString | null`
+ *       Format-specific "how to load this public file" help (copyable `<img>` /
+ *       `srcset` / `<video>` / `<audio>` snippets). Called ONLY for public files;
+ *       the core injects the returned HTML directly beneath the neutral public
+ *       `/i/:id` URL note, so the core never emits format-specific embed markup.
  *   - `renderer = { formats, thumbnail, normalize(params), run(source, spec) }`
  *       On-the-fly single-file transforms (e.g. the public image resize service).
  *   - `streamer = { spec, kind, entry, contentType(member), build(source, outDir) }`

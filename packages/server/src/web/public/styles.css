@@ -168,6 +168,10 @@ gemme-search { display: block; margin: 4px 0 16px; }
 .pubdot { color: var(--accent); margin-left: 4px; }
 .detail .url { display: inline-block; padding: 2px 6px; border: 1px solid var(--line); }
 .detail .snippet { border: 1px solid var(--line); padding: 10px; overflow-x: auto; white-space: pre; }
+/* Public-URL note: a distinct callout accented like the public badge. */
+.detail .public-note { border: 1px solid var(--accent); border-left-width: 3px; padding: 12px 14px; }
+.detail .public-note > :first-child { margin-top: 0; }
+.detail .public-note > :last-child { margin-bottom: 0; }
 
 /* --- pager (numbered, 1px cells) --- */
 .pager { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; margin: 22px auto 0;

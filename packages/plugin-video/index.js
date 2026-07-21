@@ -93,21 +93,24 @@ export default function videoPlugin(options = {}) {
       const poster = file.thumbnail_type ? ` poster="${h.url.thumbnail()}"` : '';
       if (file.stream_type === 'hls') {
         // In-app player: native HLS (Safari/iOS) else hls.js, both shipped here.
-        let html = `<video class="gemme-video" controls playsinline${poster} data-hls="${h.url.serve('master.m3u8')}"></video>
+        return `<video class="gemme-video" controls playsinline${poster} data-hls="${h.url.serve('master.m3u8')}"></video>
 <script src="${h.url.asset('player.js')}"></script>`;
-        if (h.isPublic) {
-          const publicUrl = h.url.publicServe('master.m3u8');
-          const embed = `<video controls src="${publicUrl}"></video>`;
-          html += `
-<p class="sub">Public HLS stream — drop this URL into any player:</p>
-<p><code class="url">${publicUrl}</code></p>
-<pre class="snippet">${h.escapeHtml(embed)}</pre>`;
-        }
-        return html;
       }
       // No HLS bundle yet (still processing or not transcodable) — progressive
       // playback of the original via HTTP Range still works for web codecs.
       return `<video controls playsinline${poster} src="${h.url.download()}"></video>`;
+    },
+
+    // "How to load" help for a public video: the HLS master URL + a copyable
+    // <video> snippet. Injected by the core beneath the public `/i/:id` URL.
+    // Only meaningful once the HLS bundle exists.
+    publicEmbed(file, h) {
+      if (file.stream_type !== 'hls') return null;
+      const publicUrl = h.url.publicServe('master.m3u8');
+      const embed = `<video controls src="${publicUrl}"></video>`;
+      return `<p class="sub">Public HLS stream — drop this URL into any player:</p>
+<p><code class="url">${publicUrl}</code></p>
+<pre class="snippet">${h.escapeHtml(embed)}</pre>`;
     },
 
     assets: fileURLToPath(new URL('./assets/', import.meta.url)),

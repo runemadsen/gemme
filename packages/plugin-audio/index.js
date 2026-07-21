@@ -55,13 +55,15 @@ export default function audioPlugin() {
 
     // Native progressive audio player — the core serves the bytes with Range.
     preview(file, h) {
-      let html = `<audio controls src="${h.url.download()}"></audio>`;
-      if (h.isPublic) {
-        html += `
-<p class="sub">Public URL — plays in any &lt;audio&gt; element:</p>
-<p><code class="url">${h.url.publicOriginal()}</code></p>`;
-      }
-      return html;
+      return `<audio controls src="${h.url.download()}"></audio>`;
+    },
+
+    // "How to load" help for a public audio file: a copyable <audio> embed
+    // snippet. Injected by the core beneath the public `/i/:id` URL.
+    publicEmbed(file, h) {
+      const embed = `<audio controls src="${h.url.publicOriginal()}"></audio>`;
+      return `<p class="sub">Plays in any &lt;audio&gt; element:</p>
+<pre class="snippet">${h.escapeHtml(embed)}</pre>`;
     },
 
     assets: ASSETS,

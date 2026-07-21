@@ -203,7 +203,7 @@ export function previewHelpers(plugin, file, { isPublic = false } = {}) {
  * The detail page. `preview` is HTML produced by the matching plugin's `preview`
  * capability (empty string if none) — the core never branches on file type here.
  */
-export function renderDetail({ user, file, metadata, isPublic = false, preview = '' }) {
+export function renderDetail({ user, file, metadata, isPublic = false, preview = '', publicEmbed = '' }) {
   const metaRows = metadata.length
     ? metadata
         .map(
@@ -213,12 +213,16 @@ export function renderDetail({ user, file, metadata, isPublic = false, preview =
         .join('')
     : `<tr><td colspan="3" class="empty">No metadata extracted yet.</td></tr>`;
 
-  // Every public file gets a stable, unauthenticated URL. Format-specific embed
-  // help (srcset, HLS `<video>` snippet) is emitted by the plugin's `preview`.
+  // Every public file gets a stable, unauthenticated URL. The core stays
+  // format-neutral: it emits only the plain `/i/:id` original + message.
+  // Format-specific "how to load" snippets (image `<img>`/srcset, HLS `<video>`,
+  // audio) come from the plugin's `publicEmbed` and are injected right below it.
   const publicSection = isPublic
     ? `<h2>Public URL</h2>
-  <p class="sub">This file is public — anyone can load it at:</p>
-  <p><code class="url">/i/${file.id}</code></p>`
+  <div class="public-note">
+    <p class="sub">This file is in a public collection — anyone can load it without logging in:</p>
+    <p><code class="url">/i/${file.id}</code></p>${publicEmbed ? `\n    ${publicEmbed}` : ''}
+  </div>`
     : '';
 
   return layout({

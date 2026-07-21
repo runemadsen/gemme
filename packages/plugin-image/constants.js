@@ -1,5 +1,9 @@
 export const IMAGE_MIME = /^image\//;
 export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|tiff?|heic|avif)$/i;
+// Formats a browser renders inline from raw bytes (so the preview points at the
+// original download). Others that still categorize as images (RAW, heic, tiff)
+// preview via their generated webp thumbnail instead.
+export const WEB_IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 // Camera RAW formats. exifr reads their (TIFF-based) EXIF + dimensions, and each
 // embeds a JPEG preview we can pull out and hand to sharp — sharp itself can't
 // decode RAW. Keep this list in sync with core.js `categorize` (separate pkg).

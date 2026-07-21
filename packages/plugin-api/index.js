@@ -12,11 +12,42 @@
  *     return definePlugin({
  *       id: 'my-plugin',
  *       matches(mimeType, filename) { return ... },
- *       async extract({ buffer, mimeType, filename }) {
- *         return { metadata: [{ key, value, type }], fulltext, thumbnail };
+ *       async extract({ buffer, contentPath, mimeType, filename }) {
+ *         return { metadata: [{ key, value, type }], fulltext };
  *       },
  *     });
  *   }
+ *
+ * ## Capabilities (all optional except matches/extract)
+ *
+ * A plugin declares *how its files behave*; the core stays format-agnostic and
+ * simply asks "who handles this?". Beyond `id` / `matches` / `extract`, a plugin
+ * may expose any of:
+ *
+ *   - `thumbnail = { contentType, async generate(source) -> Buffer|null }`
+ *       The single pre-generated grid/detail image (worker-built, cached).
+ *   - `preview(file, helpers) -> htmlString | null`
+ *       The detail-page preview HTML. `helpers` = { escapeHtml, isPublic, url:{
+ *       download, thumbnail, hls, publicOriginal, publicHls, publicSpec, asset } }.
+ *       `url.asset(name)` maps to this plugin's own shipped `assets/`.
+ *   - `renderer = { formats, thumbnail, normalize(params), run(source, spec) }`
+ *       On-the-fly single-file transforms (e.g. the public image resize service).
+ *   - `streamer = { spec, kind, entry, contentType(member), build(source, outDir) }`
+ *       A pre-generated *bundle* of related files with an entry manifest (e.g.
+ *       HLS: a master playlist + per-variant playlists + segments). `spec` is a
+ *       serializable recipe that keys the bundle cache.
+ *   - `assets` : absolute path to a directory of static files the plugin ships
+ *       (player JS, hls.js, default images), served by the core at
+ *       `/plugin-assets/<id>/*`. Set via
+ *       `fileURLToPath(new URL('./assets/', import.meta.url))`.
+ *
+ * ## The `source` object
+ *
+ * `thumbnail.generate` / `renderer.run` / `streamer.build` receive a `source`:
+ *   { contentHash, contentPath, mimeType, filename, loadBuffer() }
+ * `contentPath` is the on-disk path (hand it to ffmpeg — never read a multi-GB
+ * file into memory); `loadBuffer()` lazily returns the bytes for buffer-based
+ * tools (e.g. sharp). `extract` still receives the eager `buffer` too.
  */
 
 /** Current plugin API version. Bump the integer on a breaking contract change. */

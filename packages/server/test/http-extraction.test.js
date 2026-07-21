@@ -6,14 +6,14 @@ import { enqueueExtraction, runPending } from '../src/worker/index.js';
 import { fakeRegistry } from './helpers/plugins.js';
 import { BlobStore } from '../src/lib/storage/blobs.js';
 
-// Verifies the upload -> onVersionCreated -> enqueue -> extract path end to end
+// Verifies the upload -> onFileCreated -> enqueue -> extract path end to end
 // through the HTTP layer (guards the startServer/createApp wiring).
 test('uploading enqueues extraction and metadata becomes searchable', async () => {
   const enqueued = [];
   const app = await startTestApp({
-    onVersionCreated: (versionId) => {
-      enqueued.push(versionId);
-      enqueueExtraction(app.db, versionId);
+    onFileCreated: (fileId) => {
+      enqueued.push(fileId);
+      enqueueExtraction(app.db, fileId);
     },
   });
   try {
@@ -25,24 +25,24 @@ test('uploading enqueues extraction and metadata becomes searchable', async () =
       contentType: 'text/markdown',
       body: '# Trip\nmountain sky river',
     });
-    const versionId = up.json.file.current_version_id;
-    assert.deepEqual(enqueued, [versionId], 'onVersionCreated fired with the new version id');
+    const fileId = up.json.file.id;
+    assert.deepEqual(enqueued, [fileId], 'onFileCreated fired with the new file id');
 
     // Status starts pending (usable immediately, metadata fills in later)
-    assert.equal(up.json.file.versions[0].extraction_status, 'pending');
+    assert.equal(up.json.file.extraction_status, 'pending');
 
     // Drain the queue (what the background worker does on its tick)
     const ctx = { blobStore: new BlobStore(app.dataDir), registry: fakeRegistry() };
     await runPending(app.db, ctx);
 
     // Now extracted: status done, and the body is full-text searchable
-    const status = app.db.prepare('SELECT extraction_status FROM versions WHERE id = ?').get(versionId);
+    const status = app.db.prepare('SELECT extraction_status FROM files WHERE id = ?').get(fileId);
     assert.equal(status.extraction_status, 'done');
 
     const hit = app.db
-      .prepare('SELECT version_id FROM metadata_fts WHERE metadata_fts MATCH ?')
+      .prepare('SELECT file_id FROM metadata_fts WHERE metadata_fts MATCH ?')
       .get('mountain');
-    assert.equal(hit.version_id, versionId);
+    assert.equal(hit.file_id, fileId);
   } finally {
     await app.close();
   }

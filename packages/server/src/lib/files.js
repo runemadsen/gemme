@@ -1,29 +1,31 @@
 import { HttpError } from '../server/respond.js';
-import { indexVersionCore } from './metadata/store.js';
+import { indexFileCore } from './metadata/store.js';
 
 /**
- * Data layer for files and their versions. Enforces the versioning rules:
- * current = newest, new versions are explicit, old versions retained until
- * explicitly deleted.
+ * Data layer for files. A file IS one immutable content-addressed blob: its
+ * bytes never change. Re-uploading the exact same file dedups (see
+ * findDuplicateFile); "a new version of this" is simply a new file. There is no
+ * version history.
  *
  * Blob bytes are expected to already be persisted in the BlobStore; these
  * functions only manage the relational records (content_hash, size, etc.).
  */
 
 /**
- * Create a brand-new file with its first version.
- * @returns {object} the created file (with versions)
+ * Create a file from an uploaded blob. Indexes its core metadata synchronously
+ * so it's searchable immediately, before background extraction runs.
+ * @returns {object} the created file
  */
-export function createFileWithVersion(db, { filename, mimeType, hash, size, userId }) {
+export function createFile(db, { filename, mimeType, hash, size, userId }) {
   db.exec('BEGIN');
   try {
-    const file = db
-      .prepare('INSERT INTO files (original_filename, created_by) VALUES (?, ?)')
-      .run(filename, userId ?? null);
-    const fileId = file.lastInsertRowid;
-    const versionId = insertVersion(db, { fileId, hash, size, mimeType, userId });
-    db.prepare('UPDATE files SET current_version_id = ? WHERE id = ?').run(versionId, fileId);
-    indexVersionCore(db, versionId); // searchable immediately, before extraction
+    const info = db
+      .prepare(
+        'INSERT INTO files (original_filename, content_hash, byte_size, mime_type, created_by) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(filename, hash, size, mimeType ?? null, userId ?? null);
+    const fileId = info.lastInsertRowid;
+    indexFileCore(db, fileId); // searchable immediately, before extraction
     db.exec('COMMIT');
     return getFile(db, fileId);
   } catch (err) {
@@ -32,82 +34,36 @@ export function createFileWithVersion(db, { filename, mimeType, hash, size, user
   }
 }
 
-/**
- * Add a new version to an existing file. The new version becomes current.
- * @returns {object} the updated file (with versions)
- */
-export function addVersion(db, fileId, { mimeType, hash, size, userId }) {
-  const file = db.prepare('SELECT id, deleted_at FROM files WHERE id = ?').get(fileId);
-  if (!file || file.deleted_at) throw new HttpError(404, 'File not found');
-
-  db.exec('BEGIN');
-  try {
-    const versionId = insertVersion(db, { fileId, hash, size, mimeType, userId });
-    db.prepare(
-      "UPDATE files SET current_version_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
-    ).run(versionId, fileId);
-    indexVersionCore(db, versionId); // searchable immediately, before extraction
-    db.exec('COMMIT');
-    return getFile(db, fileId);
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-}
-
-function insertVersion(db, { fileId, hash, size, mimeType, userId }) {
-  // Per-file version number. MAX+1 (not COUNT+1) so deleting the latest
-  // version doesn't hand its number to the next upload.
-  const versionNo = db
-    .prepare('SELECT COALESCE(MAX(version_no), 0) + 1 AS n FROM versions WHERE file_id = ?')
-    .get(fileId).n;
-  return db
-    .prepare(
-      'INSERT INTO versions (file_id, content_hash, byte_size, mime_type, created_by, version_no) VALUES (?, ?, ?, ?, ?, ?)'
-    )
-    .run(fileId, hash, size, mimeType ?? null, userId ?? null, versionNo).lastInsertRowid;
-}
-
-/** Fetch one file with all its versions (newest first), or null. */
+/** Fetch one file, or null. */
 export function getFile(db, id, { includeDeleted = false } = {}) {
   const file = db.prepare('SELECT * FROM files WHERE id = ?').get(id);
   if (!file || (!includeDeleted && file.deleted_at)) return null;
-  const versions = db
-    .prepare('SELECT * FROM versions WHERE file_id = ? ORDER BY id DESC')
-    .all(id)
-    .map((v) => ({ ...v, is_current: v.id === file.current_version_id }));
-  return { ...file, versions };
+  return file;
 }
 
 /**
  * Find an existing non-deleted file that is the *exact same file*: same
- * original filename AND whose current version has the same content hash. Used
- * to skip re-importing a duplicate on upload. Returns the file or null.
+ * original filename AND same content hash. Used to skip re-importing a duplicate
+ * on upload. Returns the file or null.
  */
 export function findDuplicateFile(db, { filename, hash }) {
   const row = db
     .prepare(
-      `SELECT a.id
-         FROM files a
-         JOIN versions v ON v.id = a.current_version_id
-        WHERE a.deleted_at IS NULL AND a.original_filename = ? AND v.content_hash = ?
-        LIMIT 1`
+      'SELECT id FROM files WHERE deleted_at IS NULL AND original_filename = ? AND content_hash = ? LIMIT 1'
     )
     .get(filename, hash);
   return row ? getFile(db, row.id) : null;
 }
 
-/** List non-deleted files, newest-updated first, with current-version info. */
+/** List non-deleted files, newest-updated first. */
 export function listFiles(db, { limit = 50, offset = 0 } = {}) {
   const items = db
     .prepare(
-      `SELECT a.id, a.original_filename, a.created_at, a.updated_at,
-              v.id AS current_version_id, v.content_hash, v.byte_size,
-              v.mime_type, v.extraction_status, v.thumbnail_type
-         FROM files a
-         LEFT JOIN versions v ON v.id = a.current_version_id
-        WHERE a.deleted_at IS NULL
-        ORDER BY a.updated_at DESC, a.id DESC
+      `SELECT id, original_filename, created_at, updated_at,
+              content_hash, byte_size, mime_type, extraction_status, thumbnail_type, stream_type
+         FROM files
+        WHERE deleted_at IS NULL
+        ORDER BY updated_at DESC, id DESC
         LIMIT ? OFFSET ?`
     )
     .all(limit, offset);
@@ -136,40 +92,6 @@ export function softDeleteFiles(db, ids) {
   try {
     for (const id of ids) softDeleteFile(db, id);
     db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-}
-
-/**
- * Delete one version of an file. Cannot delete the last remaining version
- * (delete the file instead). Deleting the current version promotes the newest
- * remaining version to current.
- * @returns {{deletedVersionId:number, newCurrentVersionId:number}}
- */
-export function deleteVersion(db, fileId, versionId) {
-  const file = db.prepare('SELECT id, current_version_id, deleted_at FROM files WHERE id = ?').get(fileId);
-  if (!file || file.deleted_at) throw new HttpError(404, 'File not found');
-
-  const version = db.prepare('SELECT id FROM versions WHERE id = ? AND file_id = ?').get(versionId, fileId);
-  if (!version) throw new HttpError(404, 'Version not found');
-
-  const count = db.prepare('SELECT COUNT(*) AS c FROM versions WHERE file_id = ?').get(fileId).c;
-  if (count <= 1) throw new HttpError(409, 'Cannot delete the only version; delete the file instead');
-
-  db.exec('BEGIN');
-  try {
-    let newCurrent = file.current_version_id;
-    if (versionId === file.current_version_id) {
-      newCurrent = db
-        .prepare('SELECT id FROM versions WHERE file_id = ? AND id != ? ORDER BY id DESC LIMIT 1')
-        .get(fileId, versionId).id;
-      db.prepare('UPDATE files SET current_version_id = ? WHERE id = ?').run(newCurrent, fileId);
-    }
-    db.prepare('DELETE FROM versions WHERE id = ?').run(versionId);
-    db.exec('COMMIT');
-    return { deletedVersionId: versionId, newCurrentVersionId: newCurrent };
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;

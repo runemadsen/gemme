@@ -85,9 +85,14 @@ export class BlobStore {
     return fsp.readFile(this.pathForHash(hash));
   }
 
-  /** @returns {import('node:stream').Readable} */
-  createReadStream(hash) {
-    return fs.createReadStream(this.pathForHash(hash));
+  /**
+   * @param {string} hash
+   * @param {{start?:number, end?:number}} [range] - inclusive byte range for
+   *   partial (206) responses; omit for the whole file.
+   * @returns {import('node:stream').Readable}
+   */
+  createReadStream(hash, range) {
+    return fs.createReadStream(this.pathForHash(hash), range);
   }
 }
 

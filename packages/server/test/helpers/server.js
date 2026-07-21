@@ -12,10 +12,10 @@ import { fakeRegistry } from './plugins.js';
  * registry (with a fake image renderer) is wired in so rendition/thumbnail
  * routes work without the real plugin packages.
  */
-export async function startTestApp({ onVersionCreated, events = createEventBus(), dev = false, registry = fakeRegistry() } = {}) {
+export async function startTestApp({ onFileCreated, events = createEventBus(), dev = false, registry = fakeRegistry() } = {}) {
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-test-'));
   const db = openDatabase({ dataDir });
-  const server = createApp({ db, dataDir, onVersionCreated, events, dev, registry });
+  const server = createApp({ db, dataDir, onFileCreated, events, dev, registry });
   await new Promise((resolve) => server.listen(0, resolve));
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;

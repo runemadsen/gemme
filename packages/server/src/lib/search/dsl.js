@@ -90,8 +90,8 @@ export function parseValue(raw) {
 }
 
 /**
- * Compile a parsed query into SQL WHERE fragments (referencing `v.id`, the
- * current version) plus bound params. Returns { conditions: string[], params }.
+ * Compile a parsed query into SQL WHERE fragments (referencing `a.id`, the file)
+ * plus bound params. Returns { conditions: string[], params }.
  */
 export function compileQuery(parsed) {
   const conditions = [];
@@ -117,9 +117,9 @@ export function compileQuery(parsed) {
 }
 
 function compileTextTerm({ term, negate }) {
-  const fts = 'v.id IN (SELECT version_id FROM metadata_fts WHERE metadata_fts MATCH ?)';
+  const fts = 'a.id IN (SELECT file_id FROM metadata_fts WHERE metadata_fts MATCH ?)';
   const filenameSubstr =
-    "EXISTS (SELECT 1 FROM version_metadata m WHERE m.version_id = v.id AND m.key = 'filename' AND m.value_text LIKE ? ESCAPE '\\')";
+    "EXISTS (SELECT 1 FROM file_metadata m WHERE m.file_id = a.id AND m.key = 'filename' AND m.value_text LIKE ? ESCAPE '\\')";
   const combined = `(${fts} OR ${filenameSubstr})`;
   const params = [ftsPhrase(term), `%${escapeLike(term)}%`];
   return { sql: negate ? `NOT ${combined}` : combined, params };
@@ -149,7 +149,7 @@ function compileClause({ key, op, values, negate }) {
   // OR the per-value conditions: the field matches if ANY selected value matches.
   const cond = frags.length > 1 ? `(${frags.join(' OR ')})` : frags[0];
 
-  const exists = `EXISTS (SELECT 1 FROM version_metadata m WHERE m.version_id = v.id AND m.key = ? AND ${cond})`;
+  const exists = `EXISTS (SELECT 1 FROM file_metadata m WHERE m.file_id = a.id AND m.key = ? AND ${cond})`;
   // `!=` negates the match; a leading `-` negates the whole term; they compose.
   const finalNegate = (op === '!=') !== negate;
   return { sql: finalNegate ? `NOT ${exists}` : exists, params };

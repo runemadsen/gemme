@@ -7,13 +7,13 @@ test('matches static and param routes and extracts params', () => {
   const noop = () => {};
   r.get('/api/files', noop);
   r.get('/api/files/:id', noop);
-  r.get('/api/files/:id/versions/:vid/download', noop);
+  r.get('/api/collections/:id/files/:fid', noop);
 
   assert.deepEqual(r.match('GET', '/api/files').params, {});
   assert.deepEqual(r.match('GET', '/api/files/42').params, { id: '42' });
-  assert.deepEqual(r.match('GET', '/api/files/42/versions/7/download').params, {
+  assert.deepEqual(r.match('GET', '/api/collections/42/files/7').params, {
     id: '42',
-    vid: '7',
+    fid: '7',
   });
 });
 

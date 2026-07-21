@@ -48,7 +48,7 @@ test('search endpoint paginates and sorts with meta', async () => {
 
 test('search endpoint filters uploaded-and-extracted files', async () => {
   const app = await startTestApp({
-    onVersionCreated: (versionId) => enqueueExtraction(app.db, versionId),
+    onFileCreated: (fileId) => enqueueExtraction(app.db, fileId),
   });
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });

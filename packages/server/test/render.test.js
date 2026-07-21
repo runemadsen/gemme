@@ -1,42 +1,30 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderDetail } from '../src/web/render.js';
+import { renderDetail, previewHelpers } from '../src/web/render.js';
 
 const user = { email: 'r@example.com' };
 
-function fileWith({ name, mime, thumbnailType }) {
-  return {
-    id: 7,
-    original_filename: name,
-    versions: [
-      {
-        id: 42,
-        is_current: true,
-        mime_type: mime,
-        thumbnail_type: thumbnailType,
-        version_no: 1,
-        byte_size: 100,
-        created_at: '2024-01-01T00:00:00.000Z',
-      },
-    ],
-  };
-}
-
-test('detail preview: web image renders the full download', () => {
-  const html = renderDetail({ user, file: fileWith({ name: 'a.jpg', mime: 'image/jpeg' }), metadata: [] });
-  assert.match(html, /<img src="\/api\/files\/7\/versions\/42\/download"/);
+test('renderDetail injects the plugin-provided preview HTML verbatim', () => {
+  const file = { id: 7, original_filename: 'a.jpg' };
+  const preview = '<video data-hls="/api/files/7/hls/master.m3u8"></video>';
+  const html = renderDetail({ user, file, metadata: [], preview });
+  assert.match(html, /<div class="preview"><video data-hls="\/api\/files\/7\/hls\/master\.m3u8"><\/video><\/div>/);
 });
 
-test('detail preview: RAW shows the generated thumbnail, not the raw bytes', () => {
-  const file = fileWith({ name: 'DSC001.arw', mime: 'application/octet-stream', thumbnailType: 'image/webp' });
-  const html = renderDetail({ user, file, metadata: [] });
-  // The preview <img> points at the thumbnail, never at the unrenderable raw bytes.
-  assert.match(html, /<img src="\/api\/files\/7\/versions\/42\/thumbnail"/);
-  assert.doesNotMatch(html, /<img src="[^"]*\/download"/);
+test('renderDetail with no preview renders an empty preview slot (no core format logic)', () => {
+  const html = renderDetail({ user, file: { id: 7, original_filename: 'weird.xyz' }, metadata: [] });
+  assert.match(html, /<div class="preview"><\/div>/);
 });
 
-test('detail preview: RAW without a thumbnail yet shows no preview image', () => {
-  const file = fileWith({ name: 'DSC001.arw', mime: 'application/octet-stream', thumbnailType: null });
-  const html = renderDetail({ user, file, metadata: [] });
-  assert.doesNotMatch(html, /class="preview"[^>]*>\s*<img/);
+test('previewHelpers builds safe id-based URLs bound to the plugin', () => {
+  const h = previewHelpers({ id: 'video' }, { id: 42 }, { isPublic: true });
+  assert.equal(h.isPublic, true);
+  assert.equal(h.url.download(), '/api/files/42/download');
+  assert.equal(h.url.thumbnail(), '/api/files/42/thumbnail');
+  assert.equal(h.url.serve('master.m3u8'), '/api/files/42/master.m3u8');
+  assert.equal(h.url.publicServe('master.m3u8'), '/i/42/master.m3u8');
+  assert.equal(h.url.publicServe('w=800.webp'), '/i/42/w=800.webp');
+  assert.equal(h.url.publicOriginal(), '/i/42');
+  assert.equal(h.url.asset('player.js'), '/plugin-assets/video/player.js');
+  assert.equal(typeof h.escapeHtml, 'function');
 });

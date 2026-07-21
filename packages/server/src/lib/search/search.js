@@ -9,7 +9,7 @@ const SORT_COLUMNS = {
 };
 
 /**
- * Search current versions of non-deleted files with the filter DSL.
+ * Search non-deleted files with the filter DSL.
  *
  * @returns {{items:object[], total:number, limit:number, offset:number,
  *            sort:string, direction:string, query:string}}
@@ -23,10 +23,9 @@ export function searchFiles(db, query = '', { limit = 50, offset = 0, sort = 'da
   const items = db
     .prepare(
       `SELECT a.id, a.original_filename, a.created_at, a.updated_at,
-              v.id AS current_version_id, v.content_hash, v.byte_size,
-              v.mime_type, v.extraction_status, v.thumbnail_type
+              a.content_hash, a.byte_size, a.mime_type,
+              a.extraction_status, a.thumbnail_type, a.stream_type
          FROM files a
-         JOIN versions v ON v.id = a.current_version_id
         WHERE ${where}
         ORDER BY ${column} ${dir}, a.id ${dir}
         LIMIT ? OFFSET ?`
@@ -37,7 +36,6 @@ export function searchFiles(db, query = '', { limit = 50, offset = 0, sort = 'da
     .prepare(
       `SELECT COUNT(*) AS c
          FROM files a
-         JOIN versions v ON v.id = a.current_version_id
         WHERE ${where}`
     )
     .get(...params).c;

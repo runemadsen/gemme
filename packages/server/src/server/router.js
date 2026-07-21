@@ -1,6 +1,8 @@
 /**
- * Tiny path router for node:http. Patterns use `:name` segments, e.g.
- * `/api/files/:id`. Matched params are passed to the handler on `ctx.params`.
+ * Tiny path router for node:http. Patterns use `:name` (single segment, no
+ * slashes) and `*name` (catch-all, slash-allowing, must be last) tokens, e.g.
+ * `/api/files/:id` or `/i/:id/*rest`. Matched params are passed to the
+ * handler on `ctx.params`.
  */
 export class Router {
   constructor() {
@@ -53,10 +55,13 @@ export class Router {
 function compile(pattern) {
   const keys = [];
   const regexStr = pattern
-    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // escape regex metachars (not ':' or '/')
-    .replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_, key) => {
+    // Escape regex metachars, but not the token markers ':'/'*' or '/'.
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    // Single pass so params are captured in left-to-right pattern order:
+    // `:name` → one segment, `*name` → catch-all (may contain slashes).
+    .replace(/([:*])([A-Za-z_][A-Za-z0-9_]*)/g, (_, kind, key) => {
       keys.push(key);
-      return '([^/]+)';
+      return kind === '*' ? '(.+)' : '([^/]+)';
     });
   return { keys, regex: new RegExp(`^${regexStr}/?$`) };
 }

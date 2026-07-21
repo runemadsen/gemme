@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemoryDatabase } from '../src/lib/db/index.js';
-import { createFileWithVersion } from '../src/lib/files.js';
+import { createFile } from '../src/lib/files.js';
 import { createCollection, addFileToCollection } from '../src/lib/collections.js';
 import { searchFiles } from '../src/lib/search/search.js';
 import { parseQueryString } from '../src/lib/search/compose.js';
@@ -10,7 +10,7 @@ function setup() {
   const db = openMemoryDatabase();
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
   const file = (name, mimeType = 'text/plain') =>
-    createFileWithVersion(db, { filename: name, mimeType, hash: name, size: 1, userId });
+    createFile(db, { filename: name, mimeType, hash: name, size: 1, userId });
   return { db, file };
 }
 const names = (db, q) => searchFiles(db, q).items.map((i) => i.original_filename).sort();

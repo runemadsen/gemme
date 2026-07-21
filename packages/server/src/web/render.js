@@ -3,12 +3,6 @@
  * interactivity is layered on by the Web Component islands in /static/app.js.
  */
 import { stateToUrl, SORT_KEYS, PER_PAGE_OPTIONS } from '../lib/search/compose.js';
-import { categorize } from '../lib/metadata/core.js';
-
-// Image formats a browser can render inline from raw bytes. Others that still
-// categorize as images (RAW, heic, tiff) are shown via their generated webp
-// thumbnail instead, since the browser can't display the original bytes.
-const WEB_IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 
 const SORT_LABELS = { date: 'Upload date', name: 'Filename' };
 
@@ -156,7 +150,6 @@ export function renderGrid(items) {
 export function cardSig(item) {
   return [
     item.thumbnail_type || '',
-    item.current_version_id,
     item.extraction_status,
     item.byte_size,
     item.original_filename,
@@ -171,7 +164,7 @@ export function renderCard(item) {
 function cardInner(item) {
   const pending = item.extraction_status === 'pending';
   const thumb = item.thumbnail_type
-    ? `<div class="thumb"><img loading="lazy" src="/api/files/${item.id}/versions/${item.current_version_id}/thumbnail" alt=""></div>`
+    ? `<div class="thumb"><img loading="lazy" src="/api/files/${item.id}/thumbnail" alt=""></div>`
     : `<div class="thumb"><div class="filetype">${escapeHtml((item.mime_type || 'file').split('/').pop())}</div></div>`;
   return `${thumb}<div class="meta">
     <div class="name" title="${escapeHtml(item.original_filename)}">${escapeHtml(item.original_filename)}</div>
@@ -179,20 +172,38 @@ function cardInner(item) {
   </div>`;
 }
 
-export function renderDetail({ user, file, metadata, isPublic = false }) {
-  const current = file.versions.find((v) => v.is_current);
-  const name = file.original_filename;
-  const isImage = categorize(current?.mime_type, name) === 'image';
-  // Version-pinned URLs: served `immutable` in production, and switch
-  // automatically when a new version becomes current.
-  let preview = '';
-  if (current && WEB_IMAGE_EXT.test(name)) {
-    // Browser can render the original bytes directly (full resolution).
-    preview = `<img src="/api/files/${file.id}/versions/${current.id}/download" alt="">`;
-  } else if (current?.thumbnail_type && categorize(current.mime_type, name) === 'image') {
-    // RAW / non-web image: show the generated thumbnail (raw bytes won't render).
-    preview = `<img src="/api/files/${file.id}/versions/${current.id}/thumbnail" alt="">`;
-  }
+/**
+ * Helpers handed to a plugin's `preview(file, helpers)` capability. The plugin
+ * owns the detail-page preview HTML; the core only supplies safe, id-based URL
+ * builders + `escapeHtml`, so it never has to know a format. `asset(name)` maps
+ * to the plugin's own shipped `assets/` (see the /plugin-assets route).
+ */
+export function previewHelpers(plugin, file, { isPublic = false } = {}) {
+  const id = file.id;
+  return {
+    escapeHtml,
+    fmtSize,
+    isPublic,
+    file,
+    url: {
+      download: () => `/api/files/${id}/download`,
+      thumbnail: () => `/api/files/${id}/thumbnail`,
+      // Generic plugin-serving URLs (authenticated / public). The plugin composes
+      // the subpath — the core (and this helper) know no format: `serve('w=800.webp')`,
+      // `serve('master.m3u8')`, `publicServe('360p/seg_000.ts')`, …
+      serve: (subpath) => `/api/files/${id}/${subpath}`,
+      publicServe: (subpath) => `/i/${id}/${subpath}`,
+      publicOriginal: () => `/i/${id}`,
+      asset: (name) => `/plugin-assets/${plugin.id}/${name}`,
+    },
+  };
+}
+
+/**
+ * The detail page. `preview` is HTML produced by the matching plugin's `preview`
+ * capability (empty string if none) — the core never branches on file type here.
+ */
+export function renderDetail({ user, file, metadata, isPublic = false, preview = '' }) {
   const metaRows = metadata.length
     ? metadata
         .map(
@@ -201,34 +212,13 @@ export function renderDetail({ user, file, metadata, isPublic = false }) {
         )
         .join('')
     : `<tr><td colspan="3" class="empty">No metadata extracted yet.</td></tr>`;
-  const versions = file.versions
-    .map(
-      (v) => `<li>
-    <a href="/api/files/${file.id}/versions/${v.id}/download">v${v.version_no}</a>
-    ${v.is_current ? '<span class="badge current">current</span>' : ''}
-    <span class="sub">${escapeHtml(fmtSize(v.byte_size))} · ${escapeHtml(v.mime_type || '')} · ${escapeHtml(v.created_at)}</span>
-  </li>`
-    )
-    .join('');
 
-  // Public files (in a public collection) get a stable, unauthenticated URL.
-  // Images also get resize/reformat variants (width + format via the URL).
+  // Every public file gets a stable, unauthenticated URL. Format-specific embed
+  // help (srcset, HLS `<video>` snippet) is emitted by the plugin's `preview`.
   const publicSection = isPublic
     ? `<h2>Public URL</h2>
-  <p class="sub">This file is public — anyone can load the latest version at:</p>
-  <p><code class="url">/i/${file.id}</code></p>
-  ${
-    isImage
-      ? `<p class="sub">Resized / reformatted variants (drop into <code>srcset</code>):</p>
-  <pre class="snippet">${escapeHtml(
-    `<img
-  src="/i/${file.id}/w=800.webp"
-  srcset="/i/${file.id}/w=400.webp 400w, /i/${file.id}/w=800.webp 800w, /i/${file.id}/w=1600.webp 1600w"
-  sizes="(max-width: 800px) 100vw, 800px"
-  alt="">`
-  )}</pre>`
-      : ''
-  }`
+  <p class="sub">This file is public — anyone can load it at:</p>
+  <p><code class="url">/i/${file.id}</code></p>`
     : '';
 
   return layout({
@@ -239,8 +229,6 @@ export function renderDetail({ user, file, metadata, isPublic = false }) {
   <p><a href="/">← Back</a></p>
   <h1>${escapeHtml(file.original_filename)}</h1>
   <div class="preview">${preview}</div>
-  <h2>Versions</h2>
-  <ul class="versions">${versions}</ul>
   <h2>Metadata</h2>
   <table class="metadata"><thead><tr><th>Key</th><th>Value</th><th>Source</th></tr></thead><tbody>${metaRows}</tbody></table>
   <h2>Collections</h2>

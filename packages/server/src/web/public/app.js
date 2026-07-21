@@ -24,13 +24,13 @@ function fmtSize(bytes) {
 // ---- cards + keyed reconciliation ----------------------------------------
 
 function cardSig(item) {
-  return [item.thumbnail_type || '', item.current_version_id, item.extraction_status, item.byte_size, item.original_filename].join('|');
+  return [item.thumbnail_type || '', item.extraction_status, item.byte_size, item.original_filename].join('|');
 }
 
 function cardInner(item) {
   const pending = item.extraction_status === 'pending';
   const thumb = item.thumbnail_type
-    ? `<div class="thumb"><img loading="lazy" src="/api/files/${item.id}/versions/${item.current_version_id}/thumbnail" alt=""></div>`
+    ? `<div class="thumb"><img loading="lazy" src="/api/files/${item.id}/thumbnail" alt=""></div>`
     : `<div class="thumb"><div class="filetype">${esc((item.mime_type || 'file').split('/').pop())}</div></div>`;
   return `${thumb}<div class="meta">
     <div class="name" title="${esc(item.original_filename)}">${esc(item.original_filename)}</div>

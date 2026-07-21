@@ -5,15 +5,15 @@
 
 const EXTRACT = 'extract';
 
-/** Enqueue extraction for a version unless one is already pending/running. */
-export function enqueueExtraction(db, versionId) {
+/** Enqueue extraction for a file unless one is already pending/running. */
+export function enqueueExtraction(db, fileId) {
   const existing = db
-    .prepare("SELECT id FROM jobs WHERE version_id = ? AND kind = ? AND status IN ('pending','running')")
-    .get(versionId, EXTRACT);
+    .prepare("SELECT id FROM jobs WHERE file_id = ? AND kind = ? AND status IN ('pending','running')")
+    .get(fileId, EXTRACT);
   if (existing) return existing.id;
   return db
-    .prepare('INSERT INTO jobs (version_id, kind, status) VALUES (?, ?, ?)')
-    .run(versionId, EXTRACT, 'pending').lastInsertRowid;
+    .prepare('INSERT INTO jobs (file_id, kind, status) VALUES (?, ?, ?)')
+    .run(fileId, EXTRACT, 'pending').lastInsertRowid;
 }
 
 /** Atomically claim the oldest pending job, marking it running. Null if none. */

@@ -1,0 +1,25 @@
+{
+  "name": "@gemme/plugin-video",
+  "version": "0.0.0",
+  "description": "Gemme plugin: video metadata (ffprobe), poster thumbnails, and HLS adaptive streaming (ffmpeg)",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dependencies": {
+    "@gemme/plugin-api": "*",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "index.js",
+    "constants.js",
+    "ffmpeg.js",
+    "assets"
+  ],
+  "license": "MIT"
+}

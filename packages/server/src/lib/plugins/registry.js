@@ -35,4 +35,21 @@ export class PluginRegistry {
       }
     });
   }
+
+  /** A registered plugin by id (for serving its declared `assets`), or null. */
+  get(id) {
+    return this.plugins.find((p) => p.id === id) ?? null;
+  }
+
+  /**
+   * The first matching plugin's value for a capability field (e.g. 'preview',
+   * 'thumbnail', 'renderer', 'streamer'), or null. This is how the core stays
+   * format-agnostic: it asks "who serves this?" instead of branching on type.
+   */
+  capability(mimeType, filename, field) {
+    for (const p of this.matching(mimeType, filename)) {
+      if (p[field]) return p[field];
+    }
+    return null;
+  }
 }

@@ -63,8 +63,8 @@ test('transform: content-type from extension, revalidated cache, 304, clamp, bad
     assert.equal(t.ct, 'image/webp');
     assert.match(t.text, /^RENDITION:webp:400x/); // fake renderer output
     assert.ok(t.etag);
-    assert.match(t.cc, /max-age=\d+/);
-    assert.match(t.cc, /stale-while-revalidate/);
+    // A file's bytes never change, so public serving is long-lived immutable.
+    assert.match(t.cc, /immutable/);
 
     // Revalidation → 304.
     const nm = await pub(app, `/i/${img.id}/w=400.webp`, { 'if-none-match': t.etag });
@@ -86,7 +86,7 @@ test('transform: content-type from extension, revalidated cache, 304, clamp, bad
   }
 });
 
-test('transform on a non-renderable public file → 415', async () => {
+test('transform on a non-servable public file → 404', async () => {
   const app = await startTestApp();
   try {
     const { txt, parent } = await setup(app);
@@ -95,8 +95,8 @@ test('transform on a non-renderable public file → 415', async () => {
 
     // Original bytes still serve (it's public)...
     assert.equal((await pub(app, `/i/${txt.id}`)).status, 200);
-    // ...but there's no renderer for text → transform is 415.
-    assert.equal((await pub(app, `/i/${txt.id}/w=100.webp`)).status, 415);
+    // ...but no plugin serves `.webp` for a text file → extension dispatch 404s.
+    assert.equal((await pub(app, `/i/${txt.id}/w=100.webp`)).status, 404);
   } finally {
     await app.close();
   }

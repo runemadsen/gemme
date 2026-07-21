@@ -135,7 +135,7 @@ test('home page renders sorted per the URL, with controls + pager', async () => 
   }
 });
 
-test('file detail page shows versions and metadata table', async () => {
+test('file detail page shows the filename and metadata table', async () => {
   const app = await startTestApp();
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
@@ -144,7 +144,6 @@ test('file detail page shows versions and metadata table', async () => {
     const res = await app.get(`/files/${up.json.file.id}`);
     assert.equal(res.status, 200);
     assert.match(res.text, /doc\.md/);
-    assert.match(res.text, /Versions/);
     assert.match(res.text, /Metadata/);
   } finally {
     await app.close();

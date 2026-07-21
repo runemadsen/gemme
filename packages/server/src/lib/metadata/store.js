@@ -1,41 +1,50 @@
 import { coreMetadata } from './core.js';
 
 /**
- * Persist extracted metadata for a version. Extraction is per-version and
- * re-runnable: writing replaces all prior rows for the version, so running it
+ * Persist extracted metadata for a file. Extraction is per-file and
+ * re-runnable: writing replaces all prior rows for the file, so running it
  * again (e.g. after adding a plugin) is idempotent.
  */
 
 /**
  * @param {object} args
- * @param {number} args.versionId
+ * @param {number} args.fileId
  * @param {string} args.filename         - original filename, folded into FTS
  * @param {Array<{key:string,value:any,type?:string,source:string}>} args.entries
  * @param {string} [args.fulltext]        - combined extracted text for FTS body
  * @param {string|null} [args.thumbnailType] - content type of the produced
- *        thumbnail, or null for none. Recorded on the version.
+ *        thumbnail, or null for none. Recorded on the file.
+ * @param {string|null} [args.streamType]  - kind of streaming bundle produced
+ *        (e.g. 'hls'), or null for none. Recorded on the file.
  */
-export function writeExtraction(db, { versionId, filename, entries, fulltext = '', thumbnailType = null }) {
+export function writeExtraction(
+  db,
+  { fileId, filename, entries, fulltext = '', thumbnailType = null, streamType = null }
+) {
   db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM version_metadata WHERE version_id = ?').run(versionId);
-    db.prepare('DELETE FROM metadata_fts WHERE version_id = ?').run(versionId);
+    db.prepare('DELETE FROM file_metadata WHERE file_id = ?').run(fileId);
+    db.prepare('DELETE FROM metadata_fts WHERE file_id = ?').run(fileId);
 
     const insert = db.prepare(
-      'INSERT INTO version_metadata (version_id, key, value_type, value_text, value_num, source) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO file_metadata (file_id, key, value_type, value_text, value_num, source) VALUES (?, ?, ?, ?, ?, ?)'
     );
     for (const entry of entries) {
       const { value_type, value_text, value_num } = normalizeValue(entry.type, entry.value);
-      insert.run(versionId, entry.key, value_type, value_text, value_num, entry.source);
+      insert.run(fileId, entry.key, value_type, value_text, value_num, entry.source);
     }
 
-    db.prepare('INSERT INTO metadata_fts (version_id, filename, body) VALUES (?, ?, ?)').run(
-      versionId,
+    db.prepare('INSERT INTO metadata_fts (file_id, filename, body) VALUES (?, ?, ?)').run(
+      fileId,
       filename ?? '',
       fulltext ?? ''
     );
 
-    db.prepare('UPDATE versions SET thumbnail_type = ? WHERE id = ?').run(thumbnailType, versionId);
+    db.prepare('UPDATE files SET thumbnail_type = ?, stream_type = ? WHERE id = ?').run(
+      thumbnailType,
+      streamType,
+      fileId
+    );
 
     db.exec('COMMIT');
   } catch (err) {
@@ -45,53 +54,52 @@ export function writeExtraction(db, { versionId, filename, entries, fulltext = '
 }
 
 /**
- * Write a version's "core" metadata + a filename-only FTS row at creation time,
+ * Write a file's "core" metadata + a filename-only FTS row at creation time,
  * so filename/type/size are searchable immediately — before the background
  * extraction runs. Intended to be called INSIDE the caller's transaction (it
  * manages no transaction of its own). Extraction later overwrites these rows
  * (with the same core values plus plugin metadata + body text).
  */
-export function indexVersionCore(db, versionId) {
-  const v = db
+export function indexFileCore(db, fileId) {
+  const f = db
     .prepare(
-      `SELECT v.id, v.byte_size, v.mime_type, v.created_at, a.original_filename AS filename
-         FROM versions v JOIN files a ON a.id = v.file_id
-        WHERE v.id = ?`
+      `SELECT id, byte_size, mime_type, created_at, original_filename AS filename
+         FROM files WHERE id = ?`
     )
-    .get(versionId);
-  if (!v) return;
+    .get(fileId);
+  if (!f) return;
 
   const entries = coreMetadata({
-    filename: v.filename,
-    mimeType: v.mime_type,
-    byteSize: v.byte_size,
-    createdAt: v.created_at,
+    filename: f.filename,
+    mimeType: f.mime_type,
+    byteSize: f.byte_size,
+    createdAt: f.created_at,
   });
 
-  db.prepare('DELETE FROM version_metadata WHERE version_id = ?').run(versionId);
-  db.prepare('DELETE FROM metadata_fts WHERE version_id = ?').run(versionId);
+  db.prepare('DELETE FROM file_metadata WHERE file_id = ?').run(fileId);
+  db.prepare('DELETE FROM metadata_fts WHERE file_id = ?').run(fileId);
 
   const insert = db.prepare(
-    'INSERT INTO version_metadata (version_id, key, value_type, value_text, value_num, source) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO file_metadata (file_id, key, value_type, value_text, value_num, source) VALUES (?, ?, ?, ?, ?, ?)'
   );
   for (const entry of entries) {
     const { value_type, value_text, value_num } = normalizeValue(entry.type, entry.value);
-    insert.run(versionId, entry.key, value_type, value_text, value_num, entry.source);
+    insert.run(fileId, entry.key, value_type, value_text, value_num, entry.source);
   }
-  db.prepare('INSERT INTO metadata_fts (version_id, filename, body) VALUES (?, ?, ?)').run(
-    versionId,
-    v.filename ?? '',
+  db.prepare('INSERT INTO metadata_fts (file_id, filename, body) VALUES (?, ?, ?)').run(
+    fileId,
+    f.filename ?? '',
     ''
   );
 }
 
-/** Read back a version's metadata rows (for API / tests). */
-export function getVersionMetadata(db, versionId) {
+/** Read back a file's metadata rows (for API / tests). */
+export function getFileMetadata(db, fileId) {
   return db
     .prepare(
-      'SELECT key, value_type, value_text, value_num, source FROM version_metadata WHERE version_id = ? ORDER BY key, id'
+      'SELECT key, value_type, value_text, value_num, source FROM file_metadata WHERE file_id = ? ORDER BY key, id'
     )
-    .all(versionId);
+    .all(fileId);
 }
 
 /**

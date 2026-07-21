@@ -1,14 +1,55 @@
 import { definePlugin } from '@gemme/plugin-api';
 import exifr from 'exifr';
-import { IMAGE_MIME, IMAGE_EXT, RAW_EXT, EXIF_MAP, RENDER_FORMATS, MAX_EDGE } from './constants.js';
+import { IMAGE_MIME, IMAGE_EXT, RAW_EXT, WEB_IMAGE_EXT, EXIF_MAP, RENDER_FORMATS, MAX_EDGE } from './constants.js';
 import { imageSize, pushDimensions, rafPreview, embeddedPreview, renderImage } from './utils.js';
+
+/** Bytes sharp can decode, from the source buffer or a RAW's embedded preview. */
+async function decodableBuffer(source) {
+  const buf = await source.loadBuffer();
+  if (RAW_EXT.test(source.filename || '')) {
+    return rafPreview(buf) || (await embeddedPreview(buf));
+  }
+  return buf;
+}
+
+/**
+ * Parse a rendition spec segment like `w=800,fit=cover.webp` → raw params
+ * `{ w, h, fit, q }` (the extension is handled by the core dispatcher).
+ */
+export function parseSpecParams(segment) {
+  const base = segment.slice(0, segment.lastIndexOf('.'));
+  const params = {};
+  for (const tok of base.split(',')) {
+    const eq = tok.indexOf('=');
+    if (eq !== -1) params[tok.slice(0, eq)] = tok.slice(eq + 1);
+  }
+  return params;
+}
+
+/** Validate + clamp raw params into a canonical spec (the cache key). Throws on bad `fit`. */
+export function normalizeSpec(params) {
+  const spec = {};
+  const width = clampInt(params.w, 1, MAX_EDGE);
+  const height = clampInt(params.h, 1, MAX_EDGE);
+  if (width) spec.width = width;
+  if (height) spec.height = height;
+  if (params.fit != null) {
+    if (!['cover', 'contain', 'inside'].includes(params.fit)) throw new Error(`invalid fit: ${params.fit}`);
+    spec.fit = params.fit;
+  }
+  const quality = clampInt(params.q, 1, 100);
+  if (quality) spec.quality = quality;
+  return spec;
+}
 
 /**
  * Image plugin factory. Provides:
  *   - `extract`: dimensions (header parse) + EXIF (camera/lens/exposure/date/GPS);
- *   - `renderer`: resize/reformat for the core rendition engine (thumbnails +
- *     public serving). sharp can't decode RAW, so `run` first pulls the embedded
- *     JPEG preview (Fuji RAF header, or exifr's thumbnail for TIFF-based RAW).
+ *   - `thumbnail`: the single 512px webp grid/detail thumbnail;
+ *   - `preview`: the detail-page `<img>` (+ srcset snippet when public);
+ *   - `serving`: the on-the-fly resize/reformat service (serves webp/jpg/png/avif
+ *     at `/i/:id/<spec>.<ext>`). sharp can't decode RAW, so it first pulls the
+ *     embedded JPEG preview (Fuji RAF header, or exifr's thumbnail for TIFF RAW).
  *
  * @param {object} [options]
  * @param {boolean} [options.exif=true] - extract EXIF tags
@@ -23,7 +64,8 @@ export default function imagePlugin(options = {}) {
     matches(mimeType, filename) {
       return IMAGE_MIME.test(mimeType || '') || IMAGE_EXT.test(filename || '') || RAW_EXT.test(filename || '');
     },
-    async extract({ buffer, filename }) {
+    async extract({ loadBuffer, filename }) {
+      const buffer = await loadBuffer();
       const metadata = [];
       const isRaw = RAW_EXT.test(filename || '');
 
@@ -64,41 +106,54 @@ export default function imagePlugin(options = {}) {
       return { metadata };
     },
 
-    // Rendition capability used by the core engine (see server lib/renditions.js).
-    renderer: {
-      formats: RENDER_FORMATS,
-      thumbnail: { width: 512, format: 'webp' },
-      // Validate + clamp raw URL params into a canonical spec (the cache key).
-      // Deterministic key order: width, height, fit, quality.
-      normalize(params) {
-        const spec = {};
-        const width = clampInt(params.w, 1, MAX_EDGE);
-        const height = clampInt(params.h, 1, MAX_EDGE);
-        if (width) spec.width = width;
-        if (height) spec.height = height;
-        if (params.fit != null) {
-          if (!['cover', 'contain', 'inside'].includes(params.fit)) {
-            throw new Error(`invalid fit: ${params.fit}`);
-          }
-          spec.fit = params.fit;
-        }
-        const quality = clampInt(params.q, 1, 100);
-        if (quality) spec.quality = quality;
-        return spec;
+    // The single pre-generated grid/detail thumbnail: a 512px webp.
+    thumbnail: {
+      contentType: 'image/webp',
+      async generate(source) {
+        const buf = await decodableBuffer(source);
+        if (!buf) return null;
+        const out = await renderImage(buf, { width: 512, format: 'webp' });
+        return out ? out.data : null;
       },
-      // Produce the bytes. Decode via the embedded preview for RAW, else directly.
-      async run(source, spec) {
-        let buf = source.buffer;
-        if (RAW_EXT.test(source.filename || '')) {
-          buf = rafPreview(source.buffer) || (await embeddedPreview(source.buffer));
-          if (!buf) return null;
-        }
-        return renderImage(buf, {
-          width: spec.width,
-          height: spec.height,
-          fit: spec.fit,
-          quality: spec.quality,
-          format: spec.format,
+    },
+
+    // The detail-page preview HTML. Web formats render their bytes directly;
+    // RAW/other images fall back to the generated thumbnail (raw bytes won't
+    // display). Public images also get a copyable srcset snippet.
+    preview(file, h) {
+      const name = file.original_filename || '';
+      let html;
+      if (WEB_IMAGE_EXT.test(name)) html = `<img src="${h.url.download()}" alt="">`;
+      else if (file.thumbnail_type) html = `<img src="${h.url.thumbnail()}" alt="">`;
+      else return null;
+
+      if (h.isPublic) {
+        const snippet = `<img
+  src="${h.url.publicServe('w=800.webp')}"
+  srcset="${h.url.publicServe('w=400.webp')} 400w, ${h.url.publicServe('w=800.webp')} 800w, ${h.url.publicServe('w=1600.webp')} 1600w"
+  sizes="(max-width: 800px) 100vw, 800px"
+  alt="">`;
+        html += `<p class="sub">Resized / reformatted variants (drop into <code>srcset</code>):</p>
+<pre class="snippet">${h.escapeHtml(snippet)}</pre>`;
+      }
+      return html;
+    },
+
+    // Serving capability: the public on-the-fly image resize/reformat service.
+    // One `serve` per request; the core caches the result by (source, spec, ext).
+    serving: {
+      formats: RENDER_FORMATS,
+      async serve({ source, segments, ext }, api) {
+        const spec = normalizeSpec(parseSpecParams(segments[segments.length - 1]));
+        const encoder = ext === 'jpg' ? 'jpeg' : ext;
+        return api.rendition({ spec }, ext, `image/${encoder}`, async () => {
+          let buf = await source.loadBuffer();
+          if (RAW_EXT.test(source.filename || '')) {
+            buf = rafPreview(buf) || (await embeddedPreview(buf));
+            if (!buf) return null;
+          }
+          const out = await renderImage(buf, { ...spec, format: ext });
+          return out ? out.data : null;
         });
       },
     },

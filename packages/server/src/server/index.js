@@ -10,6 +10,7 @@ import { registerEventRoutes } from './routes/events.js';
 import { registerFacetRoutes } from './routes/facets.js';
 import { registerCollectionRoutes } from './routes/collections.js';
 import { registerPublicRoutes } from './routes/public.js';
+import { registerServingRoutes } from './routes/serving.js';
 import { BlobStore } from '../lib/storage/blobs.js';
 import { DerivedStore } from '../lib/storage/derived.js';
 import { createEventBus } from '../lib/bus.js';
@@ -29,6 +30,9 @@ export function buildRouter() {
   registerFacetRoutes(router);
   registerCollectionRoutes(router);
   registerPublicRoutes(router);
+  // Registered LAST: the generic `*rest` serving catch-alls must yield to the
+  // specific routes above (/download, /thumbnail, /api/files/:id/collections, …).
+  registerServingRoutes(router);
   return router;
 }
 
@@ -41,7 +45,7 @@ export function buildRouter() {
  * @param {string} opts.dataDir
  * @param {boolean} [opts.secure] - set Secure on cookies (behind HTTPS)
  */
-export function createApp({ db, dataDir, secure = false, dev = false, registry, onVersionCreated, events = createEventBus() }) {
+export function createApp({ db, dataDir, secure = false, dev = false, registry, onFileCreated, events = createEventBus() }) {
   const router = buildRouter();
   const blobStore = new BlobStore(dataDir);
   const derivedStore = new DerivedStore(dataDir);
@@ -72,7 +76,7 @@ export function createApp({ db, dataDir, secure = false, dev = false, registry, 
         url,
         user,
         sessionToken,
-        onVersionCreated,
+        onFileCreated,
       };
       await match.handler(req, res, ctx);
     } catch (err) {
@@ -82,8 +86,8 @@ export function createApp({ db, dataDir, secure = false, dev = false, registry, 
 }
 
 /** Create the server and start listening. */
-export function startServer({ db, port, dataDir, secure = false, dev = false, registry, onVersionCreated, events }) {
-  const server = createApp({ db, dataDir, secure, dev, registry, onVersionCreated, events });
+export function startServer({ db, port, dataDir, secure = false, dev = false, registry, onFileCreated, events }) {
+  const server = createApp({ db, dataDir, secure, dev, registry, onFileCreated, events });
   return new Promise((resolve) => {
     server.listen(port, () => {
       const addr = server.address();

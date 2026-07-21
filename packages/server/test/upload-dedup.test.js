@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemoryDatabase } from '../src/lib/db/index.js';
-import { createFileWithVersion, findDuplicateFile, softDeleteFile } from '../src/lib/files.js';
+import { createFile, findDuplicateFile, softDeleteFile } from '../src/lib/files.js';
 import { startTestApp } from './helpers/server.js';
 import { createUser } from '../src/lib/auth/users.js';
 
-test('findDuplicateFile matches on filename AND current-version hash only', () => {
+test('findDuplicateFile matches on filename AND content hash only', () => {
   const db = openMemoryDatabase();
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
-  createFileWithVersion(db, { filename: 'photo.jpg', mimeType: 'image/jpeg', hash: 'H1', size: 1, userId });
+  createFile(db, { filename: 'photo.jpg', mimeType: 'image/jpeg', hash: 'H1', size: 1, userId });
 
   assert.ok(findDuplicateFile(db, { filename: 'photo.jpg', hash: 'H1' }), 'exact match');
   assert.equal(findDuplicateFile(db, { filename: 'photo.jpg', hash: 'H2' }), null, 'same name, different content');
@@ -19,7 +19,7 @@ test('findDuplicateFile matches on filename AND current-version hash only', () =
 test('findDuplicateFile ignores soft-deleted files', () => {
   const db = openMemoryDatabase();
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
-  const a = createFileWithVersion(db, { filename: 'x.txt', mimeType: 'text/plain', hash: 'H', size: 1, userId });
+  const a = createFile(db, { filename: 'x.txt', mimeType: 'text/plain', hash: 'H', size: 1, userId });
   softDeleteFile(db, a.id);
   assert.equal(findDuplicateFile(db, { filename: 'x.txt', hash: 'H' }), null);
   db.close();
@@ -47,31 +47,6 @@ test('HTTP: re-uploading the same file+name is skipped; variations still import'
     // Different name, same content -> new file (blob dedups, file does not).
     assert.equal((await app.upload('/api/files', { filename: 'b.txt', contentType: 'text/plain', body: 'hello' })).json.skipped, false);
     assert.equal((await app.get('/api/files')).json.total, 3);
-  } finally {
-    await app.close();
-  }
-});
-
-test('HTTP: adding a byte-identical version is skipped; changed content adds one', async () => {
-  const app = await startTestApp();
-  try {
-    await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
-    await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
-
-    const file = (await app.upload('/api/files', { filename: 'doc.md', contentType: 'text/markdown', body: 'v1' })).json.file;
-    assert.equal(file.versions.length, 1);
-
-    // Same bytes as the current version -> skipped, still 1 version.
-    const same = await app.upload(`/api/files/${file.id}/versions`, { filename: 'doc.md', contentType: 'text/markdown', body: 'v1' });
-    assert.equal(same.status, 200);
-    assert.equal(same.json.skipped, true);
-    assert.equal((await app.get(`/api/files/${file.id}`)).json.file.versions.length, 1);
-
-    // Different bytes -> a real new version.
-    const changed = await app.upload(`/api/files/${file.id}/versions`, { filename: 'doc.md', contentType: 'text/markdown', body: 'v2' });
-    assert.equal(changed.status, 201);
-    assert.equal(changed.json.skipped, false);
-    assert.equal((await app.get(`/api/files/${file.id}`)).json.file.versions.length, 2);
   } finally {
     await app.close();
   }

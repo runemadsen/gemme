@@ -10,11 +10,17 @@ function tableNames(db) {
     .map((r) => r.name);
 }
 
-test('migration creates the core tables', () => {
+test('migration creates the core tables (and no legacy versions table)', () => {
   const db = openMemoryDatabase(); // migrates on open
   const tables = tableNames(db);
-  for (const t of ['users', 'files', 'versions', 'schema_migrations']) {
+  for (const t of ['users', 'files', 'file_metadata', 'jobs', 'schema_migrations']) {
     assert.ok(tables.includes(t), `expected table ${t}`);
+  }
+  assert.ok(!tables.includes('versions'), 'versions table should be gone');
+  // The blob fields live on files now.
+  const cols = db.prepare('PRAGMA table_info(files)').all().map((c) => c.name);
+  for (const c of ['content_hash', 'byte_size', 'mime_type', 'extraction_status', 'thumbnail_type', 'stream_type']) {
+    assert.ok(cols.includes(c), `files.${c} expected`);
   }
   db.close();
 });
@@ -37,11 +43,11 @@ test('applied migrations are recorded in schema_migrations', () => {
 
 test('foreign keys are enforced', () => {
   const db = openMemoryDatabase();
-  // versions.file_id references a non-existent file -> should fail
+  // file_metadata.file_id references a non-existent file -> should fail
   assert.throws(() => {
     db.prepare(
-      'INSERT INTO versions (file_id, content_hash, byte_size) VALUES (?, ?, ?)'
-    ).run(999, 'deadbeef', 10);
+      "INSERT INTO file_metadata (file_id, key, value_type, source) VALUES (?, 'x', 'text', 'core')"
+    ).run(999);
   }, /FOREIGN KEY/i);
   db.close();
 });

@@ -185,6 +185,8 @@ gemme-search { display: block; margin: 4px 0 16px; }
 
 /* --- detail + ruled tables --- */
 .detail .preview img { max-width: 100%; border: 1px solid var(--line); display: block; }
+/* Fixed display size so HLS ABR rung switches (e.g. 360p→720p) don't resize the player. */
+.detail .preview video { width: 100%; max-width: 100%; height: auto; border: 1px solid var(--line); display: block; }
 .detail h2 { margin-top: 22px; }
 .versions { list-style: none; padding: 0; margin: 0; }
 .versions li { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); }

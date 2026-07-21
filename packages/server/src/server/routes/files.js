@@ -1,17 +1,9 @@
 import { sendJson, readJson, HttpError } from '../respond.js';
 import { requireAuth } from '../middleware.js';
 import { receiveUpload } from '../upload.js';
-import { rendererFor, thumbnailSpec } from '../../lib/renditions.js';
-import { streamRendition } from '../render-response.js';
-import {
-  createFileWithVersion,
-  addVersion,
-  getFile,
-  listFiles,
-  softDeleteFiles,
-  deleteVersion,
-  findDuplicateFile,
-} from '../../lib/files.js';
+import { thumbnailFor, getThumbnail } from '../../lib/serving.js';
+import { streamBytes, imageCacheControl } from '../render-response.js';
+import { createFile, getFile, listFiles, softDeleteFiles, findDuplicateFile } from '../../lib/files.js';
 
 function intParam(value, what) {
   const n = Number(value);
@@ -26,8 +18,14 @@ function fileIdList(body) {
   return ids.map((id) => intParam(id, 'file id'));
 }
 
+/** The camelCase source object plugin capabilities expect, from a file row. */
+function sourceOf(file) {
+  return { contentHash: file.content_hash, mimeType: file.mime_type, filename: file.original_filename };
+}
+
 export function registerFileRoutes(router) {
-  // Upload a new file (one file per request, raw body).
+  // Upload a new file (one file per request, raw body). Uploading "a new version
+  // of this" is just another upload — it creates a new file.
   router.post(
     '/api/files',
     requireAuth(async (req, res, ctx) => {
@@ -40,44 +38,15 @@ export function registerFileRoutes(router) {
         return;
       }
 
-      const file = createFileWithVersion(ctx.db, {
+      const file = createFile(ctx.db, {
         filename: up.filename,
         mimeType: up.mimeType,
         hash: up.hash,
         size: up.size,
         userId: ctx.user.id,
       });
-      ctx.onVersionCreated?.(file.current_version_id);
+      ctx.onFileCreated?.(file.id);
       ctx.events?.emit('change', { type: 'created', fileId: file.id });
-      sendJson(res, 201, { file, skipped: false });
-    })
-  );
-
-  // Add a new version to an existing file.
-  router.post(
-    '/api/files/:id/versions',
-    requireAuth(async (req, res, ctx) => {
-      const id = intParam(ctx.params.id, 'file id');
-      const up = await receiveUpload(req, ctx.blobStore);
-
-      const existing = getFile(ctx.db, id);
-      if (!existing) throw new HttpError(404, 'File not found');
-
-      // Skip if the upload is byte-identical to the current version.
-      const current = existing.versions.find((v) => v.id === existing.current_version_id);
-      if (current && current.content_hash === up.hash) {
-        sendJson(res, 200, { file: existing, skipped: true });
-        return;
-      }
-
-      const file = addVersion(ctx.db, id, {
-        mimeType: up.mimeType,
-        hash: up.hash,
-        size: up.size,
-        userId: ctx.user.id,
-      });
-      ctx.onVersionCreated?.(file.current_version_id);
-      ctx.events?.emit('change', { type: 'version', fileId: file.id });
       sendJson(res, 201, { file, skipped: false });
     })
   );
@@ -112,128 +81,66 @@ export function registerFileRoutes(router) {
     })
   );
 
-  router.delete(
-    '/api/files/:id/versions/:vid',
-    requireAuth((req, res, ctx) => {
-      const id = intParam(ctx.params.id, 'file id');
-      const vid = intParam(ctx.params.vid, 'version id');
-      const result = deleteVersion(ctx.db, id, vid);
-      sendJson(res, 200, result);
-    })
-  );
-
-  // Download the current version's bytes — a "latest" pointer, so never immutable.
+  // Download the file's bytes (Range-enabled for progressive audio/video seeking).
   router.get(
     '/api/files/:id/download',
     requireAuth((req, res, ctx) => {
       const id = intParam(ctx.params.id, 'file id');
       const file = getFile(ctx.db, id);
-      if (!file || !file.current_version_id) throw new HttpError(404, 'File not found');
-      const version = file.versions.find((v) => v.id === file.current_version_id);
-      streamVersion(req, res, ctx, file, version, { pinned: false });
+      if (!file) throw new HttpError(404, 'File not found');
+      streamFile(req, res, ctx, file);
     })
   );
 
-  // Download a specific version's bytes — version-pinned, so safely immutable.
-  router.get(
-    '/api/files/:id/versions/:vid/download',
-    requireAuth((req, res, ctx) => {
-      const id = intParam(ctx.params.id, 'file id');
-      const vid = intParam(ctx.params.vid, 'version id');
-      const file = getFile(ctx.db, id);
-      const version = file?.versions.find((v) => v.id === vid);
-      if (!version) throw new HttpError(404, 'Version not found');
-      streamVersion(req, res, ctx, file, version, { pinned: true });
-    })
-  );
-
-  // Thumbnail for the current version (404 when none — the UI shows a placeholder).
-  // "Latest" pointer, so never immutable.
+  // The file's single pre-generated thumbnail (404 → the UI shows a placeholder).
   router.get(
     '/api/files/:id/thumbnail',
     requireAuth(async (req, res, ctx) => {
       const id = intParam(ctx.params.id, 'file id');
       const file = getFile(ctx.db, id);
-      const version = file?.versions.find((v) => v.id === file.current_version_id);
-      await serveThumbnail(req, res, ctx, file, version, { pinned: false });
+      await serveThumbnail(req, res, ctx, file);
     })
   );
 
-  // Thumbnail for a specific version — version-pinned, so safely immutable.
-  router.get(
-    '/api/files/:id/versions/:vid/thumbnail',
-    requireAuth(async (req, res, ctx) => {
-      const id = intParam(ctx.params.id, 'file id');
-      const vid = intParam(ctx.params.vid, 'version id');
-      const file = getFile(ctx.db, id);
-      const version = file?.versions.find((v) => v.id === vid);
-      await serveThumbnail(req, res, ctx, file, version, { pinned: true });
-    })
-  );
-}
-
-/** True if the client's If-None-Match matches, so we can 304. */
-function notModified(req, etag) {
-  const inm = req.headers['if-none-match'];
-  return inm != null && inm === etag;
+  // Plugin renditions/streams (`/api/files/:id/<plugin path>.<ext>`) are served
+  // by routes/serving.js via extension dispatch — no format route lives here.
 }
 
 /**
- * Cache policy for images.
- *
- * A URL that names a specific version (`pinned`) serves bytes that can never
- * change — in production a version is written exactly once (created, extracted,
- * thumbnailed) and never regenerated — so it's safe to cache `immutable` (fast,
- * zero revalidation). The bare "current" routes (`pinned: false`) track a moving
- * pointer, so they always revalidate against an ETag.
- *
- * The one exception is dev mode (`ctx.dev`): re-running extraction locally
- * rewrites a thumbnail for the *same* version, which would break the immutable
- * promise, so dev never sends `immutable`. This is the only place the promise
- * can be broken, and it's confined to development.
+ * Serve a file's thumbnail — the plugin's `thumbnail` capability produces one
+ * canonical image, pre-generated by the worker (regenerated on demand here if
+ * the cache was cleared). 404 when no plugin provides one.
  */
-function cacheControl(ctx, pinned) {
-  return pinned && !ctx.dev ? 'public, max-age=31536000, immutable' : 'no-cache';
+async function serveThumbnail(req, res, ctx, file) {
+  if (!file) throw new HttpError(404, 'No thumbnail');
+  const thumb = thumbnailFor(ctx.registry, file.mime_type, file.original_filename);
+  if (!thumb) throw new HttpError(404, 'No thumbnail');
+  const out = await getThumbnail(ctx, sourceOf(file), thumb);
+  if (!out) throw new HttpError(404, 'No thumbnail');
+  const { sig, ext, contentType } = out;
+  const stat = ctx.derivedStore.statVariant(file.content_hash, sig, ext);
+  streamBytes(req, res, {
+    size: stat.size,
+    contentType,
+    etag: `"${file.content_hash}-${sig}"`,
+    cacheControl: imageCacheControl(ctx),
+    open: (range) => ctx.derivedStore.createVariantReadStream(file.content_hash, sig, ext, range),
+  });
 }
 
-/**
- * Serve a version's thumbnail — the renderer's pre-generated `thumbnail` preset
- * rendition (generated on demand if not yet cached). 404 when the file has no
- * renderer (the UI falls back to a placeholder). Shares the rendition cache with
- * public transforms of the same size.
- */
-async function serveThumbnail(req, res, ctx, file, version, { pinned } = {}) {
-  if (!version) throw new HttpError(404, 'No thumbnail');
-  const renderer = rendererFor(ctx.registry, version.mime_type, file.original_filename);
-  if (!renderer) throw new HttpError(404, 'No thumbnail');
-  const { spec, ext } = thumbnailSpec(renderer);
-  const source = {
-    contentHash: version.content_hash,
-    mimeType: version.mime_type,
-    filename: file.original_filename,
-  };
-  await streamRendition(req, res, ctx, source, renderer, spec, ext, cacheControl(ctx, pinned));
-}
-
-function streamVersion(req, res, ctx, file, version, { pinned } = {}) {
-  if (!ctx.blobStore.has(version.content_hash)) {
+function streamFile(req, res, ctx, file) {
+  if (!ctx.blobStore.has(file.content_hash)) {
     throw new HttpError(410, 'Blob no longer available');
   }
-  // The bytes ARE the content hash, so it's a perfect strong validator.
-  const etag = `"${version.content_hash}"`;
-  if (notModified(req, etag)) {
-    res.writeHead(304, { etag, 'cache-control': cacheControl(ctx, pinned) });
-    res.end();
-    return;
-  }
-  res.writeHead(200, {
-    etag,
-    'cache-control': cacheControl(ctx, pinned),
-    'content-type': version.mime_type || 'application/octet-stream',
-    'content-length': version.byte_size,
-    'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(file.original_filename)}`,
+  streamBytes(req, res, {
+    size: file.byte_size,
+    contentType: file.mime_type || 'application/octet-stream',
+    // The bytes ARE the content hash, so it's a perfect strong validator.
+    etag: `"${file.content_hash}"`,
+    cacheControl: imageCacheControl(ctx),
+    disposition: `inline; filename*=UTF-8''${encodeURIComponent(file.original_filename)}`,
+    open: (range) => ctx.blobStore.createReadStream(file.content_hash, range),
   });
-  ctx.blobStore.createReadStream(version.content_hash).pipe(res);
 }
 
 function clamp(n, lo, hi) {

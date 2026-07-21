@@ -22,8 +22,8 @@ export default function textPlugin(options = {}) {
         TEXT_EXT.test(filename || '')
       );
     },
-    async extract({ buffer }) {
-      const body = buffer.toString('utf8');
+    async extract({ loadBuffer }) {
+      const body = (await loadBuffer()).toString('utf8');
       const words = body.split(/\s+/).filter(Boolean).length;
       const lines = body === '' ? 0 : body.split('\n').length;
       return {

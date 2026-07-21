@@ -8,7 +8,7 @@ import { BlobStore } from '../src/lib/storage/blobs.js';
 import { PluginRegistry } from '../src/lib/plugins/registry.js';
 import { runExtraction, runPending } from '../src/worker/index.js';
 import { enqueueExtraction, pendingJobCount } from '../src/worker/queue.js';
-import { getVersionMetadata } from '../src/lib/metadata/store.js';
+import { getFileMetadata } from '../src/lib/metadata/store.js';
 import { fakeRegistry } from './helpers/plugins.js';
 
 async function setup() {
@@ -17,23 +17,14 @@ async function setup() {
   const blobStore = new BlobStore(dir);
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x')
     .lastInsertRowid;
-  async function seedVersion({ filename, mimeType, buffer }) {
+  async function seedFile({ filename, mimeType, buffer }) {
     const { hash, size } = await blobStore.putBuffer(buffer);
-    db.exec('BEGIN');
     const file = db
-      .prepare('INSERT INTO files (original_filename, created_by) VALUES (?, ?)')
-      .run(filename, userId);
-    const version = db
-      .prepare('INSERT INTO versions (file_id, content_hash, byte_size, mime_type) VALUES (?, ?, ?, ?)')
-      .run(file.lastInsertRowid, hash, size, mimeType);
-    db.prepare('UPDATE files SET current_version_id = ? WHERE id = ?').run(
-      version.lastInsertRowid,
-      file.lastInsertRowid
-    );
-    db.exec('COMMIT');
-    return version.lastInsertRowid;
+      .prepare('INSERT INTO files (original_filename, content_hash, byte_size, mime_type, created_by) VALUES (?, ?, ?, ?, ?)')
+      .run(filename, hash, size, mimeType, userId);
+    return file.lastInsertRowid;
   }
-  return { db, blobStore, dir, seedVersion, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
+  return { db, blobStore, dir, seedFile, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
 }
 
 const meta = (rows, key) => rows.filter((r) => r.key === key);
@@ -41,9 +32,9 @@ const meta = (rows, key) => rows.filter((r) => r.key === key);
 test('extraction records core metadata for any file', async () => {
   const s = await setup();
   try {
-    const vid = await s.seedVersion({ filename: 'a.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('xyz') });
+    const vid = await s.seedFile({ filename: 'a.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('xyz') });
     await runExtraction(s.db, { blobStore: s.blobStore, registry: new PluginRegistry() }, vid);
-    const rows = getVersionMetadata(s.db, vid);
+    const rows = getFileMetadata(s.db, vid);
     assert.equal(meta(rows, 'type')[0].value_text, 'other');
     assert.equal(meta(rows, 'size')[0].value_num, 3);
     assert.equal(meta(rows, 'ext')[0].value_text, 'bin');
@@ -56,18 +47,18 @@ test('extraction records core metadata for any file', async () => {
 test('text plugin adds counts and full text is searchable', async () => {
   const s = await setup();
   try {
-    const vid = await s.seedVersion({ filename: 'notes.md', mimeType: 'text/markdown', buffer: Buffer.from('mountain sky\ntree river') });
+    const vid = await s.seedFile({ filename: 'notes.md', mimeType: 'text/markdown', buffer: Buffer.from('mountain sky\ntree river') });
     await runExtraction(s.db, { blobStore: s.blobStore, registry: fakeRegistry() }, vid);
-    const rows = getVersionMetadata(s.db, vid);
+    const rows = getFileMetadata(s.db, vid);
     assert.equal(meta(rows, 'type')[0].value_text, 'text');
     assert.equal(meta(rows, 'word_count')[0].value_num, 4);
     assert.equal(meta(rows, 'char_count').length, 1);
 
     // FTS finds a word from the body
     const hit = s.db
-      .prepare('SELECT version_id FROM metadata_fts WHERE metadata_fts MATCH ?')
+      .prepare('SELECT file_id FROM metadata_fts WHERE metadata_fts MATCH ?')
       .get('mountain');
-    assert.equal(hit.version_id, vid);
+    assert.equal(hit.file_id, vid);
   } finally {
     await s.cleanup();
   }
@@ -81,9 +72,9 @@ test('image plugin extracts width/height (source tagged)', async () => {
     buf.write('IHDR', 12, 'ascii');
     buf.writeUInt32BE(1920, 16);
     buf.writeUInt32BE(1080, 20);
-    const vid = await s.seedVersion({ filename: 'p.png', mimeType: 'image/png', buffer: buf });
+    const vid = await s.seedFile({ filename: 'p.png', mimeType: 'image/png', buffer: buf });
     await runExtraction(s.db, { blobStore: s.blobStore, registry: fakeRegistry() }, vid);
-    const rows = getVersionMetadata(s.db, vid);
+    const rows = getFileMetadata(s.db, vid);
     assert.equal(meta(rows, 'width')[0].value_num, 1920);
     assert.equal(meta(rows, 'width')[0].source, 'image');
     assert.equal(meta(rows, 'orientation')[0].value_text, 'landscape');
@@ -103,11 +94,11 @@ test('multiple plugins merge; a failing plugin is isolated', async () => {
     };
     const registry = new PluginRegistry().register(boom).register(tagger);
 
-    const vid = await s.seedVersion({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('data') });
+    const vid = await s.seedFile({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('data') });
     const result = await runExtraction(s.db, { blobStore: s.blobStore, registry }, vid);
 
     // tagger's multi-valued output survived; boom was isolated
-    const rows = getVersionMetadata(s.db, vid);
+    const rows = getFileMetadata(s.db, vid);
     assert.equal(meta(rows, 'label').length, 2, 'both label values stored');
     assert.deepEqual(result.pluginErrors.map((e) => e.plugin), ['boom']);
   } finally {
@@ -118,14 +109,14 @@ test('multiple plugins merge; a failing plugin is isolated', async () => {
 test('re-running extraction is idempotent (no duplicate rows)', async () => {
   const s = await setup();
   try {
-    const vid = await s.seedVersion({ filename: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+    const vid = await s.seedFile({ filename: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
     const ctx = { blobStore: s.blobStore, registry: fakeRegistry() };
     await runExtraction(s.db, ctx, vid);
-    const firstCount = getVersionMetadata(s.db, vid).length;
+    const firstCount = getFileMetadata(s.db, vid).length;
     await runExtraction(s.db, ctx, vid);
-    assert.equal(getVersionMetadata(s.db, vid).length, firstCount);
+    assert.equal(getFileMetadata(s.db, vid).length, firstCount);
     // FTS also deduped to one row
-    assert.equal(s.db.prepare('SELECT COUNT(*) c FROM metadata_fts WHERE version_id = ?').get(vid).c, 1);
+    assert.equal(s.db.prepare('SELECT COUNT(*) c FROM metadata_fts WHERE file_id = ?').get(vid).c, 1);
   } finally {
     await s.cleanup();
   }
@@ -134,7 +125,7 @@ test('re-running extraction is idempotent (no duplicate rows)', async () => {
 test('queue: enqueue dedups and runPending drains + sets status', async () => {
   const s = await setup();
   try {
-    const vid = await s.seedVersion({ filename: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hi there') });
+    const vid = await s.seedFile({ filename: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hi there') });
     enqueueExtraction(s.db, vid);
     enqueueExtraction(s.db, vid); // dedup — still one pending
     assert.equal(pendingJobCount(s.db), 1);
@@ -143,7 +134,7 @@ test('queue: enqueue dedups and runPending drains + sets status', async () => {
     assert.equal(processed, 1);
     assert.equal(pendingJobCount(s.db), 0);
 
-    const status = s.db.prepare('SELECT extraction_status FROM versions WHERE id = ?').get(vid).extraction_status;
+    const status = s.db.prepare('SELECT extraction_status FROM files WHERE id = ?').get(vid).extraction_status;
     assert.equal(status, 'done');
   } finally {
     await s.cleanup();

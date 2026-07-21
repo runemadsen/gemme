@@ -31,7 +31,7 @@ test('upload creates an file, then it is listable, gettable, downloadable', asyn
     assert.equal(up.status, 201);
     const file = up.json.file;
     assert.equal(file.original_filename, 'hello.txt');
-    assert.equal(file.versions.length, 1);
+    assert.equal(file.content_hash != null, true);
 
     // list
     const list = await app.get('/api/files');
@@ -53,25 +53,17 @@ test('upload creates an file, then it is listable, gettable, downloadable', asyn
   }
 });
 
-test('adding a version updates current; old version still downloadable', async () => {
+test('re-uploading the same name with different content makes a new file', async () => {
   const app = await startTestApp();
   try {
     await login(app);
     const v1 = (await app.upload('/api/files', { filename: 'doc.md', body: 'v1' })).json.file;
-    const firstVersionId = v1.current_version_id;
+    const v2 = (await app.upload('/api/files', { filename: 'doc.md', body: 'v2 content' })).json.file;
 
-    const v2 = (await app.upload(`/api/files/${v1.id}/versions`, { filename: 'doc.md', body: 'v2 content' }))
-      .json.file;
-    assert.equal(v2.versions.length, 2);
-    assert.notEqual(v2.current_version_id, firstVersionId);
-
-    // current download returns v2
-    assert.equal((await app.get(`/api/files/${v1.id}/download`)).text, 'v2 content');
-    // old version still retrievable
-    assert.equal(
-      (await app.get(`/api/files/${v1.id}/versions/${firstVersionId}/download`)).text,
-      'v1'
-    );
+    // A "new version" is simply a new file — distinct ids, both downloadable.
+    assert.notEqual(v2.id, v1.id);
+    assert.equal((await app.get(`/api/files/${v1.id}/download`)).text, 'v1');
+    assert.equal((await app.get(`/api/files/${v2.id}/download`)).text, 'v2 content');
   } finally {
     await app.close();
   }
@@ -85,7 +77,7 @@ test('same content under different names dedups the blob but makes distinct file
     const a = (await app.upload('/api/files', { filename: 'one.bin', body: 'DUP' })).json.file;
     const b = (await app.upload('/api/files', { filename: 'two.bin', body: 'DUP' })).json.file;
     assert.notEqual(a.id, b.id);
-    assert.equal(a.versions[0].content_hash, b.versions[0].content_hash);
+    assert.equal(a.content_hash, b.content_hash);
   } finally {
     await app.close();
   }

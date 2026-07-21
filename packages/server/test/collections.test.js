@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemoryDatabase } from '../src/lib/db/index.js';
-import { createFileWithVersion } from '../src/lib/files.js';
+import { createFile } from '../src/lib/files.js';
 import {
   createCollection,
   updateCollection,
@@ -20,7 +20,7 @@ function seedUser(db) {
   return db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
 }
 const file = (db, userId, name) =>
-  createFileWithVersion(db, { filename: name, mimeType: 'text/plain', hash: name, size: 1, userId });
+  createFile(db, { filename: name, mimeType: 'text/plain', hash: name, size: 1, userId });
 
 // descendants of a collection (incl. self) via the closure table
 const descendants = (db, id) =>

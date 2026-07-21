@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import textPlugin from '../index.js';
 
+// The core passes extract a lazy `loadBuffer()` (see server worker/extract.js).
+const src = (buffer) => ({ loadBuffer: async () => buffer });
+
 test('factory returns a valid plugin stamped with apiVersion', () => {
   const p = textPlugin();
   assert.equal(p.id, 'text');
@@ -18,7 +21,7 @@ test('matches text by mime and extension', () => {
 
 test('extracts counts and full text', async () => {
   const p = textPlugin();
-  const { metadata, fulltext } = await p.extract({ buffer: Buffer.from('mountain sky\nriver') });
+  const { metadata, fulltext } = await p.extract(src(Buffer.from('mountain sky\nriver')));
   const byKey = Object.fromEntries(metadata.map((m) => [m.key, m.value]));
   assert.equal(byKey.word_count, 3);
   assert.equal(byKey.line_count, 2);
@@ -27,6 +30,6 @@ test('extracts counts and full text', async () => {
 
 test('respects maxFulltext option', async () => {
   const p = textPlugin({ maxFulltext: 5 });
-  const { fulltext } = await p.extract({ buffer: Buffer.from('abcdefghij') });
+  const { fulltext } = await p.extract(src(Buffer.from('abcdefghij')));
   assert.equal(fulltext, 'abcde');
 });

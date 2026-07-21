@@ -7,6 +7,13 @@ files (e.g. as a central file server for website files).
 Runs as a single process with just **Node.js + SQLite**. No external services,
 minimal dependencies.
 
+Gemme is great if you want to:
+
+- You're a professor and want to host your own research archive
+- You're a musician and want to host your archive of music ideas
+- You're a photographer and want to host your photo collection and serve it
+  directly on websites
+
 ## Requirements
 
 - Node.js **≥ 22.5**
@@ -56,10 +63,12 @@ The monorepo is built using NPM Workspaces.
 | Package               | Purpose                                                         |
 | --------------------- | --------------------------------------------------------------- |
 | `@gemme/plugin-api`   | The plugin contract (`definePlugin`, `apiVersion`).             |
-| `@gemme/server`       | Core: storage, versioning, search, extraction worker, HTTP API. |
+| `@gemme/server`       | Core: storage, search, extraction worker, HTTP API. |
 | `@gemme/cli`          | The `gemme` command.                                            |
 | `@gemme/plugin-text`  | Full text + counts (zero-dep).                                  |
-| `@gemme/plugin-image` | Image dimensions + EXIF.                                        |
+| `@gemme/plugin-image` | Image dimensions + EXIF; resize/thumbnail (sharp).              |
+| `@gemme/plugin-video` | Video metadata + poster + HLS adaptive streaming (ffmpeg).      |
+| `@gemme/plugin-audio` | Audio metadata; progressive streaming via HTTP Range.           |
 
 Plugins live outside core: an instance's `gemme.config.js` imports and enables
 them, so core ships no plugin dependencies and you can add your own plugin (a
@@ -97,16 +106,23 @@ folder and re-run `dev:init` for a clean slate.
 
 ## How it works
 
-- **Files & versions.** Each upload is a file with an ordered version
-  history; the newest is current. Uploading again creates a _new file_ — adding
-  a version is an explicit action. Bytes are content-addressed (SHA-256), so
-  duplicates dedup.
+- **Files.** Each upload is one immutable file — its bytes never change.
+  Re-uploading is just a _new file_ (there are no versions). Bytes are
+  content-addressed (SHA-256), so identical re-uploads dedup. Because a file id
+  fully identifies its bytes, every serving URL is safely cached long-term.
 - **Metadata.** A file is usable the instant it lands (just the filename). A
   background worker then runs extraction **plugins** and fills in metadata and
   full text. Multiple plugins can process one file and their output is merged.
-  Default plugins: `text` (full text + counts, zero-dep) and `image`
-  (dimensions, EXIF, and WebP thumbnails). PDF, video, AI tagging, etc. are
+  Default plugins: `text`, `image`, `video`, `audio`. PDF, AI tagging, etc. are
   opt-in plugins.
+- **Plugins own how their files behave.** Beyond metadata, a plugin can declare a
+  `thumbnail` (the one grid image), a `preview` (the detail-page HTML), a
+  `renderer` (on-the-fly image resizing), a `streamer` (a pre-generated bundle
+  like HLS), and shipped `assets` (e.g. a video player). The core stays
+  format-agnostic — adding a new file type is a new plugin, not a core change.
+- **Streaming.** Video is transcoded to **HLS** (adaptive bitrate) and served at
+  a stable public URL any player can embed; audio (and any file) streams
+  **progressively** via HTTP Range so players can seek without downloading it all.
 - **Search.** A single query box mixes full text and typed filters:
 
   ```

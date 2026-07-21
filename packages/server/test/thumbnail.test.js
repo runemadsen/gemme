@@ -8,13 +8,12 @@ import { BlobStore } from '../src/lib/storage/blobs.js';
 import { DerivedStore } from '../src/lib/storage/derived.js';
 import { runExtraction, runPending } from '../src/worker/index.js';
 import { enqueueExtraction } from '../src/worker/queue.js';
-import { rendererFor, thumbnailSpec, specSig } from '../src/lib/renditions.js';
 import { startTestApp } from './helpers/server.js';
 import { fakeRegistry } from './helpers/plugins.js';
 import { createUser } from '../src/lib/auth/users.js';
 
-// Thumbnails are now ordinary renditions: the renderer's `thumbnail` preset,
-// pre-generated on extraction and served/cached like public transforms.
+// Thumbnails are a plugin `thumbnail` capability: one pre-generated image the
+// worker stores in the derived store and records as `files.thumbnail_type`.
 
 async function setup() {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gemme-thumb-'));
@@ -24,50 +23,21 @@ async function setup() {
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
   async function seed({ filename, mimeType, buffer }) {
     const { hash, size } = await blobStore.putBuffer(buffer);
-    db.exec('BEGIN');
-    const a = db.prepare('INSERT INTO files (original_filename, created_by) VALUES (?, ?)').run(filename, userId);
-    const v = db
-      .prepare('INSERT INTO versions (file_id, content_hash, byte_size, mime_type) VALUES (?, ?, ?, ?)')
-      .run(a.lastInsertRowid, hash, size, mimeType);
-    db.prepare('UPDATE files SET current_version_id = ? WHERE id = ?').run(v.lastInsertRowid, a.lastInsertRowid);
-    db.exec('COMMIT');
-    return { versionId: v.lastInsertRowid, hash };
+    const a = db
+      .prepare('INSERT INTO files (original_filename, content_hash, byte_size, mime_type, created_by) VALUES (?, ?, ?, ?, ?)')
+      .run(filename, hash, size, mimeType, userId);
+    return { fileId: a.lastInsertRowid, hash };
   }
   return { db, blobStore, derivedStore, seed, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
 }
 
-test('extraction pre-generates the thumbnail rendition and records thumbnail_type', async () => {
+test('extraction pre-generates the thumbnail and records thumbnail_type', async () => {
   const s = await setup();
   try {
-    const { versionId, hash } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
-    const registry = fakeRegistry();
-    const res = await runExtraction(s.db, { blobStore: s.blobStore, derivedStore: s.derivedStore, registry }, versionId);
-
+    const { fileId } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
+    const res = await runExtraction(s.db, { blobStore: s.blobStore, derivedStore: s.derivedStore, registry: fakeRegistry() }, fileId);
     assert.equal(res.thumbnail, true);
-    assert.equal(s.db.prepare('SELECT thumbnail_type FROM versions WHERE id = ?').get(versionId).thumbnail_type, 'image/webp');
-
-    // The thumbnail is a variant keyed by the thumbnail preset's signature.
-    const renderer = rendererFor(registry, 'image/png', 'p.png');
-    const { spec, ext } = thumbnailSpec(renderer);
-    assert.equal(s.derivedStore.hasVariant(hash, specSig(spec, ext), ext), true);
-  } finally {
-    await s.cleanup();
-  }
-});
-
-test('config renditions.pregenerate produces extra variants that share the cache', async () => {
-  const s = await setup();
-  try {
-    const { versionId, hash } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
-    const registry = fakeRegistry();
-    await runExtraction(
-      s.db,
-      { blobStore: s.blobStore, derivedStore: s.derivedStore, registry, renditions: { pregenerate: ['w=1024.webp'] } },
-      versionId
-    );
-    const renderer = rendererFor(registry, 'image/png', 'p.png');
-    const spec = renderer.normalize({ w: '1024' });
-    assert.equal(s.derivedStore.hasVariant(hash, specSig(spec, 'webp'), 'webp'), true);
+    assert.equal(s.db.prepare('SELECT thumbnail_type FROM files WHERE id = ?').get(fileId).thumbnail_type, 'image/webp');
   } finally {
     await s.cleanup();
   }
@@ -76,22 +46,22 @@ test('config renditions.pregenerate produces extra variants that share the cache
 test('no derivedStore => no thumbnail generated', async () => {
   const s = await setup();
   try {
-    const { versionId } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
-    const res = await runExtraction(s.db, { blobStore: s.blobStore, registry: fakeRegistry() }, versionId);
+    const { fileId } = await s.seed({ filename: 'p.png', mimeType: 'image/png', buffer: Buffer.from('img') });
+    const res = await runExtraction(s.db, { blobStore: s.blobStore, registry: fakeRegistry() }, fileId);
     assert.equal(res.thumbnail, false);
-    assert.equal(s.db.prepare('SELECT thumbnail_type FROM versions WHERE id = ?').get(versionId).thumbnail_type, null);
+    assert.equal(s.db.prepare('SELECT thumbnail_type FROM files WHERE id = ?').get(fileId).thumbnail_type, null);
   } finally {
     await s.cleanup();
   }
 });
 
-test('a file with no renderer (text) gets no thumbnail', async () => {
+test('a file whose plugins have no thumbnail capability (text) gets none', async () => {
   const s = await setup();
   try {
-    const { versionId } = await s.seed({ filename: 'n.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
-    const res = await runExtraction(s.db, { blobStore: s.blobStore, derivedStore: s.derivedStore, registry: fakeRegistry() }, versionId);
+    const { fileId } = await s.seed({ filename: 'n.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+    const res = await runExtraction(s.db, { blobStore: s.blobStore, derivedStore: s.derivedStore, registry: fakeRegistry() }, fileId);
     assert.equal(res.thumbnail, false);
-    assert.equal(s.db.prepare('SELECT thumbnail_type FROM versions WHERE id = ?').get(versionId).thumbnail_type, null);
+    assert.equal(s.db.prepare('SELECT thumbnail_type FROM files WHERE id = ?').get(fileId).thumbnail_type, null);
   } finally {
     await s.cleanup();
   }
@@ -105,8 +75,8 @@ async function drain(app) {
   });
 }
 
-test('HTTP: thumbnail served for images, 404 for non-images; list flags thumbnail_type', async () => {
-  const app = await startTestApp({ onVersionCreated: (id) => enqueueExtraction(app.db, id) });
+test('HTTP: thumbnail served for images, 404 for text; list flags thumbnail_type', async () => {
+  const app = await startTestApp({ onFileCreated: (id) => enqueueExtraction(app.db, id) });
   try {
     await createUser(app.db, { email: 'r@example.com', password: 'supersecret' });
     await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
@@ -118,7 +88,7 @@ test('HTTP: thumbnail served for images, 404 for non-images; list flags thumbnai
     const thumb = await app.get(`/api/files/${img.json.file.id}/thumbnail`);
     assert.equal(thumb.status, 200);
     assert.equal(thumb.res.headers.get('content-type'), 'image/webp');
-    assert.match(thumb.text, /^RENDITION:webp:512x/);
+    assert.equal(thumb.text, 'THUMB:image');
 
     assert.equal((await app.get(`/api/files/${txt.json.file.id}/thumbnail`)).status, 404);
 
@@ -136,22 +106,17 @@ async function seedImageApp(app) {
   await app.post('/api/login', { email: 'r@example.com', password: 'supersecret' });
   const img = await app.upload('/api/files', { filename: 'p.png', contentType: 'image/png', body: 'imgbytes' });
   await drain(app);
-  return app.db.prepare('SELECT id, current_version_id FROM files WHERE id = ?').get(img.json.file.id);
+  return img.json.file.id;
 }
 
-test('HTTP (production): version-pinned thumbnails are immutable; bare pointers revalidate', async () => {
-  const app = await startTestApp({ onVersionCreated: (id) => enqueueExtraction(app.db, id) });
+test('HTTP (production): thumbnails are immutable and support If-None-Match', async () => {
+  const app = await startTestApp({ onFileCreated: (id) => enqueueExtraction(app.db, id) });
   try {
-    const { id, current_version_id: vid } = await seedImageApp(app);
-
-    const pinnedThumb = await app.get(`/api/files/${id}/versions/${vid}/thumbnail`);
-    assert.equal(pinnedThumb.status, 200);
-    assert.match(pinnedThumb.res.headers.get('cache-control'), /immutable/);
-
-    const bareThumb = await app.get(`/api/files/${id}/thumbnail`);
-    assert.equal(bareThumb.status, 200);
-    assert.match(bareThumb.res.headers.get('cache-control'), /no-cache/);
-    const etag = bareThumb.res.headers.get('etag');
+    const id = await seedImageApp(app);
+    const thumb = await app.get(`/api/files/${id}/thumbnail`);
+    assert.equal(thumb.status, 200);
+    assert.match(thumb.res.headers.get('cache-control'), /immutable/);
+    const etag = thumb.res.headers.get('etag');
     assert.ok(etag);
     const revalidated = await app.get(`/api/files/${id}/thumbnail`, { headers: { 'if-none-match': etag } });
     assert.equal(revalidated.status, 304);
@@ -161,11 +126,11 @@ test('HTTP (production): version-pinned thumbnails are immutable; bare pointers 
   }
 });
 
-test('HTTP (dev mode): even version-pinned thumbnails are never immutable', async () => {
-  const app = await startTestApp({ dev: true, onVersionCreated: (id) => enqueueExtraction(app.db, id) });
+test('HTTP (dev mode): thumbnails are never immutable', async () => {
+  const app = await startTestApp({ dev: true, onFileCreated: (id) => enqueueExtraction(app.db, id) });
   try {
-    const { id, current_version_id: vid } = await seedImageApp(app);
-    const thumb = await app.get(`/api/files/${id}/versions/${vid}/thumbnail`);
+    const id = await seedImageApp(app);
+    const thumb = await app.get(`/api/files/${id}/thumbnail`);
     assert.equal(thumb.status, 200);
     assert.doesNotMatch(thumb.res.headers.get('cache-control'), /immutable/);
     assert.match(thumb.res.headers.get('cache-control'), /no-cache/);

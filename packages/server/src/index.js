@@ -11,10 +11,10 @@ export { createEventBus, emitChange } from './lib/bus.js';
 export { PluginRegistry } from './lib/plugins/registry.js';
 export { loadPluginRegistry, CONFIG_FILENAME } from './lib/plugins/config.js';
 export { ExtractionWorker, runExtraction, runPending, enqueueExtraction } from './worker/index.js';
-export { getVersionMetadata } from './lib/metadata/store.js';
+export { getFileMetadata } from './lib/metadata/store.js';
 export { searchFiles, paginatedSearch } from './lib/search/search.js';
 export { getFacet, getFacets } from './lib/facets.js';
-export { rendererFor, parseSpecSegment, specSig, getRendition, contentTypeForExt } from './lib/renditions.js';
+export { makeSource, specSig, servingFor, makeServingApi, thumbnailFor, getThumbnail } from './lib/serving.js';
 export {
   getCollection,
   listCollections,

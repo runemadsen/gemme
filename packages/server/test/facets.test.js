@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemoryDatabase } from '../src/lib/db/index.js';
-import { createFileWithVersion, softDeleteFile } from '../src/lib/files.js';
+import { createFile, softDeleteFile } from '../src/lib/files.js';
 import { getFacet, getFacets } from '../src/lib/facets.js';
 import { searchFiles } from '../src/lib/search/search.js';
 
@@ -9,9 +9,9 @@ function seedUser(db) {
   return db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
 }
 const add = (db, userId, filename, mimeType) =>
-  createFileWithVersion(db, { filename, mimeType, hash: filename, size: 1, userId });
+  createFile(db, { filename, mimeType, hash: filename, size: 1, userId });
 
-test('getFacet returns distinct values with counts (whole archive, current versions)', () => {
+test('getFacet returns distinct values with counts (whole archive)', () => {
   const db = openMemoryDatabase();
   const userId = seedUser(db);
   add(db, userId, 'a.jpg', 'image/jpeg');

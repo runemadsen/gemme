@@ -36,7 +36,12 @@ Environment:
 // The CLI package a scaffolded project depends on (provides the `gemme` bin).
 const CLI_PKG = '@gemme/cli';
 // Plugins enabled in a freshly-initialized instance.
-const DEFAULT_PLUGINS = ['@gemme/plugin-text', '@gemme/plugin-image'];
+const DEFAULT_PLUGINS = [
+  '@gemme/plugin-text',
+  '@gemme/plugin-image',
+  '@gemme/plugin-video',
+  '@gemme/plugin-audio',
+];
 
 export async function runCli(argv) {
   const [command, ...rest] = argv;
@@ -304,6 +309,6 @@ async function cmdStart(argv) {
     dev,
     registry,
     events,
-    onVersionCreated: (versionId) => worker.enqueue(versionId),
+    onFileCreated: (fileId) => worker.enqueue(fileId),
   });
 }

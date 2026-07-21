@@ -7,25 +7,25 @@ export { enqueueExtraction } from './queue.js';
 export { runExtraction } from './extract.js';
 
 /**
- * Process a single claimed job. Sets the version's extraction_status and the
+ * Process a single claimed job. Sets the file's extraction_status and the
  * job's terminal status. Plugin-level failures are recorded but still count as
  * a completed extraction (partial success); only a hard failure marks 'failed'.
  */
 async function processJob(db, ctx, job) {
   try {
-    const { pluginErrors } = await runExtraction(db, ctx, job.version_id);
-    setVersionStatus(db, job.version_id, 'done');
+    const { pluginErrors } = await runExtraction(db, ctx, job.file_id);
+    setFileStatus(db, job.file_id, 'done');
     completeJob(db, job.id, {
       error: pluginErrors.length ? JSON.stringify(pluginErrors) : null,
     });
   } catch (err) {
-    setVersionStatus(db, job.version_id, 'failed');
+    setFileStatus(db, job.file_id, 'failed');
     failJob(db, job.id, err.message);
   }
 }
 
-function setVersionStatus(db, versionId, status) {
-  db.prepare('UPDATE versions SET extraction_status = ? WHERE id = ?').run(status, versionId);
+function setFileStatus(db, fileId, status) {
+  db.prepare('UPDATE files SET extraction_status = ? WHERE id = ?').run(status, fileId);
 }
 
 /**
@@ -37,9 +37,9 @@ export async function runPending(db, ctx) {
   let job;
   while ((job = claimNextJob(db))) {
     await processJob(db, ctx, job);
-    // Signal that this version's metadata/thumbnail changed, so open clients
+    // Signal that this file's metadata/thumbnail changed, so open clients
     // re-render (the pending card gains its thumbnail).
-    ctx.events?.emit('change', { type: 'extracted', versionId: job.version_id });
+    ctx.events?.emit('change', { type: 'extracted', fileId: job.file_id });
     processed++;
   }
   return processed;
@@ -65,9 +65,9 @@ export class ExtractionWorker {
     this.running = false;
   }
 
-  /** Enqueue extraction for a version (wire this to onVersionCreated). */
-  enqueue(versionId) {
-    enqueueExtraction(this.db, versionId);
+  /** Enqueue extraction for a file (wire this to onFileCreated). */
+  enqueue(fileId) {
+    enqueueExtraction(this.db, fileId);
   }
 
   async tick() {

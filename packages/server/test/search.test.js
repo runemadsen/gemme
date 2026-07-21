@@ -8,7 +8,7 @@ import { BlobStore } from '../src/lib/storage/blobs.js';
 import { fakeRegistry } from './helpers/plugins.js';
 import { runExtraction } from '../src/worker/index.js';
 import { searchFiles, paginatedSearch } from '../src/lib/search/search.js';
-import { createFileWithVersion } from '../src/lib/files.js';
+import { createFile } from '../src/lib/files.js';
 
 function pngBuf(w, h) {
   const b = Buffer.alloc(24);
@@ -29,14 +29,10 @@ async function setup() {
 
   async function add({ filename, mimeType, buffer }) {
     const { hash, size } = await blobStore.putBuffer(buffer);
-    db.exec('BEGIN');
-    const file = db.prepare('INSERT INTO files (original_filename, created_by) VALUES (?, ?)').run(filename, userId);
-    const version = db
-      .prepare('INSERT INTO versions (file_id, content_hash, byte_size, mime_type) VALUES (?, ?, ?, ?)')
-      .run(file.lastInsertRowid, hash, size, mimeType);
-    db.prepare('UPDATE files SET current_version_id = ? WHERE id = ?').run(version.lastInsertRowid, file.lastInsertRowid);
-    db.exec('COMMIT');
-    await runExtraction(db, ctx, version.lastInsertRowid);
+    const file = db
+      .prepare('INSERT INTO files (original_filename, content_hash, byte_size, mime_type, created_by) VALUES (?, ?, ?, ?, ?)')
+      .run(filename, hash, size, mimeType, userId);
+    await runExtraction(db, ctx, file.lastInsertRowid);
     return file.lastInsertRowid;
   }
 
@@ -112,7 +108,7 @@ test('searchFiles sorts by name and date, asc and desc', () => {
   const db = openMemoryDatabase();
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
   // Insert in a deliberately non-alphabetical, non-chronological-friendly order.
-  const mk = (name) => createFileWithVersion(db, { filename: name, mimeType: 'text/plain', hash: name, size: 1, userId });
+  const mk = (name) => createFile(db, { filename: name, mimeType: 'text/plain', hash: name, size: 1, userId });
   mk('banana.txt');
   mk('apple.txt');
   mk('cherry.txt');
@@ -130,7 +126,7 @@ test('paginatedSearch returns page slices + meta and clamps overshoot', () => {
   const db = openMemoryDatabase();
   const userId = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run('a@b', 'x').lastInsertRowid;
   for (let i = 1; i <= 5; i++)
-    createFileWithVersion(db, { filename: `f${i}.txt`, mimeType: 'text/plain', hash: `h${i}`, size: 1, userId });
+    createFile(db, { filename: `f${i}.txt`, mimeType: 'text/plain', hash: `h${i}`, size: 1, userId });
 
   const p1 = paginatedSearch(db, { sort: 'name', direction: 'asc', page: 1, perPage: 2 });
   assert.deepEqual(p1.items.map((i) => i.original_filename), ['f1.txt', 'f2.txt']);

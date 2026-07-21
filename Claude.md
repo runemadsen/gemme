@@ -31,40 +31,47 @@ and powerful.
 
 Decisions made while working through the concept. Keep this updated as we go.
 
-### Files & versioning (decided)
+### Files (decided — no versions)
 
-- **File vs. version.** A file is a stable ID pointing at an ordered list of
-  versions. Uploading again never overwrites bytes — it appends a new version.
-- **Current = newest.** The current version is always the most recent upload. No
-  rollback / pinning for now.
-- **Retention.** Old versions are kept by default and only removed when
-  explicitly deleted. Most files stay single-version (e.g. photos); some
-  accumulate many (e.g. drafts).
-- **New versions are explicit.** Dragging in files always creates *new files*.
-  Adding a version is a deliberate "upload new version of this" action. Many
-  files with the same filename may coexist — filename is a label, not identity.
-- **Content-addressed storage.** Version bytes are stored under their content
-  hash, so identical re-uploads dedup for free.
-- **Upload dedup (skip identical).** `POST /api/files` skips creating a new
-  file when a non-deleted file already has the **same filename AND same
-  current-version content hash** (`findDuplicateFile`); it responds `200
-  { file, skipped: true }` instead of `201`. Same name + different content, or
-  different name + same content, still import. Since the client uploads one
-  request per file, a bulk drop of N imports only the non-duplicates.
-  Likewise, `POST /api/files/:id/versions` **skips** when the upload is
-  byte-identical to the file's current version (also `200 { skipped: true }`),
-  so re-adding the same bytes never creates a redundant version.
+- **A file IS one immutable blob.** A file is a stable ID with a single set of
+  bytes (`content_hash`) that never change for its lifetime. There is **no
+  version history** — we removed it deliberately (see "Removing versions" below).
+- **"A new version" = a new file.** Re-uploading the same content under a
+  different intent just creates another file. Many files with the same filename
+  may coexist — filename is a label, not identity.
+- **Content-addressed storage.** File bytes are stored under their content hash,
+  so identical re-uploads dedup the blob on disk for free.
+- **Upload dedup (skip identical).** `POST /api/files` skips creating a new file
+  when a non-deleted file already has the **same filename AND same content hash**
+  (`findDuplicateFile`); it responds `200 { file, skipped: true }` instead of
+  `201`. Same name + different content, or different name + same content, still
+  import. Since the client uploads one request per file, a bulk drop of N imports
+  only the non-duplicates.
+
+### Removing versions (decided)
+
+- **Why.** Versioning made caching hard: to serve images `immutable` we needed
+  *version-pinned* URLs (`/api/files/:id/versions/:vid/…`) while the bare by-id
+  URLs tracked a moving "current" pointer and had to be `no-cache`. Collapsing to
+  one-blob-per-file means a file id fully identifies its bytes, so **every serving
+  URL is safely `immutable`** and the whole pinned/bare duality disappears.
+- **What changed.** The `versions` table, `files.current_version_id`, and
+  `version_no` are gone; the blob columns (`content_hash`, `byte_size`,
+  `mime_type`, `extraction_status`, `thumbnail_type`) live directly on `files`.
+  Metadata/FTS/jobs are keyed by `file_id` (`file_metadata`, `metadata_fts.file_id`,
+  `jobs.file_id`). The add-version / delete-version routes and the detail-page
+  "Versions" section were removed. Identifiers were renamed file-based
+  (`createFile`, `indexFileCore`, `getFileMetadata`, `onFileCreated`).
+- The app was **not deployed**, so the baseline migrations were edited in place
+  rather than adding a data-migration.
 
 ### Metadata (decided)
 
-- **Extracted metadata lives on the version** — it is intrinsic to the bytes
-  (EXIF, dimensions, PDF page count, extracted text). The file surfaces the
-  current version's extracted metadata.
-- **User metadata lives on the file** — it survives across versions and is
-  never clobbered by a re-upload.
+- **Extracted metadata lives on the file** — it is intrinsic to the bytes (EXIF,
+  dimensions, PDF page count, extracted text), stored in `file_metadata`.
 - **Extraction is plugin-based per filetype** and must be expandable. Core ships
   plugins (e.g. image/EXIF, PDF), and users can add more file plugins later.
-- **Provenance.** Each file/version records which user performed the action.
+- **Provenance.** Each file records which user uploaded it.
 
 ### Users (decided)
 
@@ -73,13 +80,9 @@ Decisions made while working through the concept. Keep this updated as we go.
 
 ### Sharing (decided)
 
-- Files are **private by default**. Public share links point at the **current
-  version only** — uploading a new version updates what every shared URL serves.
-
-### Version history surfacing (decided)
-
-- For now version history is **internal** (safety/audit), not independently
-  browsable or downloadable in the UI. Door left open to expose it later.
+- Files are **private by default**. A public file is served at a stable by-id URL
+  (`/i/:id`); since a file's bytes never change, that URL always serves the same
+  content.
 
 ### Tech stack (decided)
 
@@ -97,34 +100,65 @@ Decisions made while working through the concept. Keep this updated as we go.
   of it. Everything runs in one process on one box.
 - **Search:** the **filter DSL is the headline feature**. Storage/query layer is
   designed around typed filtering (`width=1080`, `duration>10s`) plus FTS5 full
-  text. Extracted metadata stored as typed EAV (`version_metadata`) with a `source`
+  text. Extracted metadata stored as typed EAV (`file_metadata`) with a `source`
   column per plugin; keys are multi-valued.
 - **Distribution:** `npx @gemme/cli init` scaffolds a project (no global
   install). Each instance is a small npm project whose `package.json` lists
   `@gemme/cli` + plugins as deps and has `start`/`create-user` scripts; you run
   it with `npm run start`. DB migrations run automatically on startup.
 
-### Plugin interface (decided)
+### Plugin interface (decided — format-agnostic core)
 
-- A plugin exposes `id`, `matches(mimeType, filename)`, and
-  `async extract({buffer, mimeType, filename}) -> { metadata: [{key, value, type}], fulltext? }`.
-- **Multiple plugins run per file** and their metadata is **merged** (each row
-  tagged with the plugin `id`). E.g. an EXIF plugin and an object-recognition
-  plugin both process one image. Per-plugin failure isolation: one crashing plugin
-  never blocks ingestion or the others.
-- Core ships an image plugin (EXIF/dimensions) and a PDF plugin (page count/text).
-  External libs (image decode, PDF parse, resizing, AI inference) stay behind
-  the plugin boundary.
-- **Optional `renderer` capability (serving).** A plugin may add
-  `renderer = { formats, thumbnail, normalize(params), run(source, spec) }` to
-  serve images (resize/reformat). The **core rendition engine** owns everything
-  cross-cutting (route, visibility, variant cache, clamping, pre-generation); the
-  plugin only declares its output `formats`, a `thumbnail` preset, a cheap
-  deterministic `normalize` (→ the cache key, checked before rendering), and
-  `run` (the bytes; null when undecodable). Thumbnails are just the pre-generated
-  `thumbnail` rendition — not a separate mechanism. A future PDF plugin adds the
-  same shape with `normalize` understanding `page`. See "Renditions & public
-  serving" below.
+The guiding principle: **a strong, simple core + flexible plugins.** A plugin
+declares *how its files behave*; the core owns only generic machinery (routing,
+auth/visibility, caching, HTTP Range, the derived cache) and asks "which plugin
+handles this?" — it never branches on file type. Adding a new format = a new
+plugin, **no core change**. Capability lookups: `registry.capability(mime,
+filename, field)` (first matching plugin's field) + `registry.get(id)`.
+
+- **Required:** `id`, `matches(mimeType, filename)`, and
+  `async extract({ mimeType, filename, contentPath, loadBuffer }) -> { metadata:
+  [{key, value, type}], fulltext? }`. Multiple plugins run per file and their
+  metadata is **merged** (tagged with the plugin `id`); per-plugin failure is
+  isolated. `contentPath` is the on-disk path (for ffmpeg/ffprobe); `loadBuffer()`
+  lazily returns the bytes (for sharp/text) — so a multi-GB video is never read
+  into memory just to probe it.
+- **`thumbnail = { contentType, async generate(source) -> Buffer|null }`** — the
+  single pre-generated grid/detail image (worker-built, cached, served at
+  `/api/files/:id/thumbnail`). Each plugin decides: plugin-image resizes to
+  512 webp, plugin-video extracts a frame, plugin-audio returns a shipped default
+  image. Replaces the old `renderer.thumbnail` preset.
+- **`preview(file, helpers) -> htmlString|null`** — the detail-page preview HTML
+  (a plugin owns it; the core injects the string). `helpers` = `{ escapeHtml,
+  isPublic, url:{ download, thumbnail, serve(subpath), publicServe(subpath),
+  publicOriginal, asset(name) } }`. `serve`/`publicServe` build the generic
+  serving URLs (the plugin composes the subpath — no format knowledge in the
+  helper); `asset` maps to the plugin's own shipped `assets/`.
+- **`serving = { formats, version?, async serve({source, segments, ext}, api),
+  async pregenerate?({source}, api) }`** — the single serving capability
+  (**replaces the old `renderer` + `streamer`**). `formats` are the output
+  extensions the plugin serves; the core dispatches by the request's final-segment
+  extension (see "Serving" below). `serve` returns a **descriptor** (built via the
+  `api`) that the core streams; `pregenerate` (optional, worker-time) builds
+  expensive artifacts (HLS) and returns a `stream_type` tag. The plugin never
+  touches the filesystem/HTTP — it only calls the `api`:
+  - `api.rendition(cacheKey, ext, contentType, produce)` — cached single derived
+    file (on-the-fly image variants); `produce()→Buffer`.
+  - `api.member(memberPath, contentType)` — a member of the pre-generated bundle
+    (HLS); null if absent.
+  - `api.bytes(buffer, contentType)` — inline bytes.
+  - `api.buildBundle(async (outDir)=>{…})` — pregenerate-only; builds into a temp
+    dir, published atomically under the file's bundle key.
+- **`assets`** — absolute path to a directory of static files the plugin ships
+  (player JS, hls.js, default images), served generically at
+  `/plugin-assets/:id/*` (sanitized). Set via
+  `fileURLToPath(new URL('./assets/', import.meta.url))`.
+- **`source`** (passed to extract/thumbnail/serving) =
+  `{ contentHash, contentPath, mimeType, filename, loadBuffer() }`.
+- Core plugins: `text`, `image` (EXIF/dimensions + `serving` resize), `video`
+  (ffmpeg: poster thumbnail + `serving` HLS ABR), `audio` (ffprobe metadata +
+  default thumbnail; progressive Range serving needs no `serving`). Heavy deps
+  (sharp, ffmpeg-static/ffprobe-static) stay inside the plugin packages.
 
 ### Deferred (not in v1)
 
@@ -139,14 +173,13 @@ Full design lives in the plan file referenced below; summary:
 
 - **Storage:** single `--data-dir` holds `gemme.db`, content-addressed `blobs/`
   (sharded by hash prefix, dedup by SHA-256), and `derived/` thumbnails.
-- **Data model:** `users`, `files` (→ current_version_id, soft delete),
-  `versions` (content_hash, mime_type, extraction_status, thumbnail_type, and
-  **version_no** — a per-file 1,2,3… number for display, distinct from the
-  global `id`), `version_metadata` (typed EAV + source), `metadata_fts` (FTS5),
-  `jobs` (durable queue), `schema_migrations`.
-- **Background worker:** on upload the version's **core metadata (filename, ext,
+- **Data model:** `users`, `files` (content_hash, byte_size, mime_type,
+  extraction_status, thumbnail_type, soft delete), `file_metadata` (typed EAV +
+  source), `metadata_fts` (FTS5, keyed by `file_id`), `jobs` (durable queue),
+  `schema_migrations`.
+- **Background worker:** on upload the file's **core metadata (filename, ext,
   type, mime, size, created) + a filename FTS row are indexed synchronously**
-  (`indexVersionCore`, inside the create transaction) so it's *searchable
+  (`indexFileCore`, inside the create transaction) so it's *searchable
   immediately* — before extraction. An in-process job runner then polls `jobs`
   and fills in plugin metadata (dimensions, EXIF, body text, thumbnail) later,
   running all matching plugins and merging output. Core is computed once in
@@ -157,8 +190,8 @@ Full design lives in the plan file referenced below; summary:
 ### Upload wire format (decided during build)
 
 Rather than pull in a multipart parser, uploads are **one file per request as a
-raw body**: `POST /api/files` (new file) or `POST /api/files/:id/versions`
-(new version) with the bytes as the request body, `X-Filename` (URL-encoded) and
+raw body**: `POST /api/files` (always a new file) with the bytes as the request
+body, `X-Filename` (URL-encoded) and
 `Content-Type` headers carrying the rest. Streams straight into the blob store.
 Bulk upload = many parallel requests. Isolated in `src/server/upload.js` so it can
 be swapped for multipart later. (We own both client and server, so no HTML-form
@@ -171,7 +204,8 @@ Tests use Node's built-in `node:test` + `assert` (zero deps); HTTP tested via
 
 1. [DONE] Skeleton + storage core (CLI, config, DB module, migration runner, blob store).
 2. [DONE] Users + auth (create-user, login/session, HTTP router + middleware).
-3. [DONE] Files & versioning API (upload, add version, list, get, delete, download, provenance).
+3. [DONE] Files API (upload, list, get, delete, download, provenance). One blob per
+   file — no versions (see "Removing versions").
 4. [DONE] Background worker + plugin system (multi-plugin merge, source tags, per-plugin
    failure isolation, re-runnable). Zero-dep core plugins: `text` (full text + counts)
    and `image` (dimensions via header parsing). EXIF/PDF/thumbnails/AI are future opt-in
@@ -185,9 +219,9 @@ Tests use Node's built-in `node:test` + `assert` (zero deps); HTTP tested via
    `src/server/routes/pages.js`.
 
 **v1 complete.** All six milestones built TDD, then restructured into an npm-workspaces
-monorepo with a config-driven plugin system (see below). 142 tests green (`npm test`). Verified
+monorepo with a config-driven plugin system (see below). Tests green (`npm test`). Verified
 end-to-end against a live server: create-user → login → drag/upload → background
-extraction → DSL search → versioning → download → detail pages.
+extraction → DSL search → download → detail pages.
 
 Not covered by automated tests (needs a browser): in-page JS island behavior
 (drag-drop, live-typing search). The module parses, its endpoints are tested, and
@@ -205,8 +239,8 @@ Query = whitespace-separated terms; any term negatable with leading `-`.
   what the filter sidebar emits; across fields clauses still AND.
 - **Free text:** bare or `"quoted"` words → matched against FTS5 (filename tokens
   + extracted body) OR as a filename substring. Multiple terms AND; negatives exclude.
-- Searches **current versions of non-deleted files**. Empty query = list all.
-- Compiles to `EXISTS (… version_metadata …)` per clause + FTS subqueries.
+- Searches **non-deleted files**. Empty query = list all.
+- Compiles to `EXISTS (… file_metadata …)` per clause + FTS subqueries.
   Files: `src/search/dsl.js` (parse/compile), `src/search/search.js` (execute).
   Examples: `mountains type:image width>1920 -type:pdf created>2024-01-01`.
 
@@ -225,8 +259,11 @@ packages/
   cli/           @gemme/cli           the `gemme` bin (init/start/migrate/
                                         create-user/plugins add) → depends on server
   plugin-text/   @gemme/plugin-text   full text + counts (zero-dep)
-  plugin-image/  @gemme/plugin-image  dimensions (header parse) + EXIF (exifr)
-                                        + WebP thumbnails (sharp)
+  plugin-image/  @gemme/plugin-image  dimensions + EXIF (exifr) + resize/thumb (sharp)
+  plugin-video/  @gemme/plugin-video  ffprobe metadata + poster frame + HLS ABR
+                                        (ffmpeg-static/ffprobe-static); ships hls.js
+  plugin-audio/  @gemme/plugin-audio  ffprobe metadata + default thumbnail
+                                        (progressive playback via core Range)
 ```
 
 - **Plugins are packages, not bundled in core.** Each plugin default-exports a
@@ -243,28 +280,40 @@ packages/
   init`" error. (Interactive `create-user` prompts need a real TTY — through
   `npm run` you pass `--email`/`--password`; the both-TTY guard in
   `cli/src/prompt.js` prevents silently buffered prompts.)
-- **Renditions & public serving (unified).** A **rendition** is a derived image
-  produced from a source version by a plugin's `renderer` (§ Plugin interface).
-  Thumbnails and public on-the-fly transforms are the SAME mechanism. Core engine:
-  `lib/renditions.js` (`rendererFor`, `parseSpecSegment`, `specSig`, `getRendition`,
-  `thumbnailSpec`, `specFromString`). Variants are content-addressed in the
-  **derived store** (`lib/storage/derived.js`,
-  `<dataDir>/derived/<sourceHash>.<sig>.<ext>`, `sig` = hash of the canonical
-  spec+ext) — generated once, shared across collections. `getRendition` checks
-  the cache (via the cheap `normalize` key) before calling the expensive `run`.
-  - **Thumbnail = a pre-generated rendition.** The worker (`worker/extract.js`
-    `pregenerateRenditions`), after metadata extraction, generates the renderer's
-    `thumbnail` preset (512w webp) + any `config.renditions.pregenerate` sizes,
-    and records the thumbnail's content type in `versions.thumbnail_type` (kept
-    for cheap grid rendering; list/search still expose it). No renderer → no
-    thumbnail (gray box). `extract` no longer produces thumbnails.
-  - **Served** at `GET /api/files/:id[/versions/:vid]/thumbnail` (auth) — the
-    thumbnail-preset rendition, generated on demand if not yet cached, same cache
-    policy as before (pinned immutable in prod, bare no-cache; dev never
-    immutable). Because thumbnail and `/i/:id/w=512.webp` normalize to the same
-    spec, they share one variant file.
-  - The registry reaches the request path via `ctx.registry` (threaded through
-    `createApp`/`startServer`; the CLI passes the loaded registry + `config.renditions`).
+- **Serving — one extension-dispatch mechanism, plugin-driven.** The core knows
+  no format. A serving request's **final path segment's extension** selects the
+  plugin (the first that `matches` the file *and* lists the extension in
+  `serving.formats`); that plugin's `serve` returns a **descriptor** and the core
+  streams it. Two thin routes (`routes/serving.js`, registered LAST so specific
+  routes win): `GET /api/files/:id/*rest` (auth) and `GET /i/:id/*rest` (public,
+  via `resolvePublic`). A router `*name` wildcard captures nested member paths
+  (`360p/seg_000.ts`); segments are traversal-sanitized. Engine: **`lib/serving.js`**
+  (`servingFor`, `makeServingApi`, `specSig`, `makeSource`, `thumbnailFor`,
+  `getThumbnail`) — it absorbed the old `renditions.js` + `bundles.js`.
+  - **Descriptor** = `{ size, contentType, etag, open(range) }` (or via
+    `api.bytes`) — exactly what `streamBytes` consumes, so Range/206, ETag/304 and
+    caching are uniform. The `api` (rendition/member/bytes/buildBundle) owns the
+    derived store + cache keys; plugins stay HTTP-free and never see the filesystem.
+  - **On-the-fly** (image variants, `api.rendition`): content-addressed in the
+    **derived store** (`<dataDir>/derived/<sourceHash>.<sig>.<ext>`), generated
+    once on first request, shared across collections.
+  - **Pre-generated bundles** (HLS, `api.buildBundle` in `serving.pregenerate`):
+    directory storage (`<hash>.<sig>/` members, published by atomic dir rename so a
+    half-built bundle is never served). Serving is read-only — a missing member
+    404s (still processing); it never triggers an on-request transcode.
+  - **Thumbnails** stay a dedicated capability + route: the worker calls the
+    plugin's `thumbnail.generate(source)` (via `getThumbnail`), stores it under a
+    fixed sig, records `files.thumbnail_type`; served at `GET /api/files/:id/thumbnail`
+    (regenerated on demand if the cache was cleared). No capability → gray box.
+  - **HTTP Range (206)** is core (`streamBytes` in `server/render-response.js`,
+    `{start,end}` through blob/derived read streams): `/api/files/:id/download`,
+    `/i/:id`, and served members all support it (audio/progressive-video seeking).
+  - **Detail preview** is the plugin's `preview(file, helpers)` HTML, invoked in
+    `routes/pages.js` and injected by `render.js` `renderDetail` — no per-format
+    preview branch in core. **Plugin assets** (player JS, hls.js, default images)
+    ship inside the plugin (`assets` dir) and serve at `/plugin-assets/:id/*`.
+  - The registry reaches request handlers via `ctx.registry` (threaded through
+    `createApp`/`startServer`).
 - **RAW images (`plugin-image`, done).** Camera RAW (`arw sr2 srf cr2 cr3 nef nrw
   raf orf rw2 dng pef srw 3fr iiq rwl mrw dcr kdc mos`) is supported without new
   deps. `matches` accepts RAW **by extension** (browsers send
@@ -283,7 +332,7 @@ packages/
   limits: TIFF-based previews are small/soft, EXIF dims are approximate — a real
   decoder (libraw/exiftool) is the deferred upgrade, behind the plugin boundary.
   Note: changing this code only affects **new** uploads; existing files must be
-  re-extracted (re-run `runExtraction` per version) to pick it up.
+  re-extracted (re-run `runExtraction` per file) to pick it up.
 - **Extension-first categorization.** `metadata/core.js` `categorize(mimeType,
   filename)` classifies by **extension** first (an `EXT_CATEGORY` map incl. RAW →
   `image`), falling back to MIME when the extension is unknown/absent — so a
@@ -293,28 +342,25 @@ packages/
   images (RAW, heic, tiff) show the generated `/thumbnail` (raw bytes won't render
   in a browser); everything else has no preview. RAW ext list is duplicated in
   `plugin-image` `RAW_EXT` and core `EXT_CATEGORY` (separate packages) — keep in sync.
-  - **Image cache policy (thumbnails + downloads).** The UI references
-    **version-pinned** URLs for cached display — the grid thumbnail is
-    `/api/files/:id/versions/:vid/thumbnail` and the detail photo is
-    `/api/files/:id/versions/:vid/download` (both carry the current version id).
-    These are served **`immutable`** (1-year, no revalidation) in production,
-    because a version is written exactly once — created, extracted, thumbnailed —
-    and **never regenerated**, so the version id fully identifies the bytes. When
-    a new version becomes current the URL changes, so the cache busts naturally.
-    The bare "latest" pointers (`/api/files/:id/thumbnail`, `.../download`) track
-    a moving target and are therefore **always `no-cache` + strong `ETag`**
-    (honoring `If-None-Match` → 304); they're for sharing/API, not cached display.
-    The one thing that can break the immutable promise is **re-running extraction
-    locally** (a plugin/`sharp` change rewrites a thumbnail for the same version),
-    so **dev mode never sends `immutable`** — a `dev` config flag (`--dev` /
-    `GEMME_DEV`, threaded to `ctx.dev`; the repo's `npm run dev` sets it) forces
-    `no-cache` on the pinned routes too. This was the "grid shows the wrong
-    thumbnail while the detail page is right, fixed by a hard refresh" bug: the old
-    code marked thumbnails `immutable` and got poisoned by dev re-extraction.
-    Files: `server/routes/files.js` (`cacheControl`, `pinned` flag),
-    `lib/config.js` (`dev`), `server/index.js` (`ctx.dev`),
-    `web/render.js` + `web/public/app.js` (version-pinned URLs);
-    tests: `server/test/thumbnail.test.js`.
+  - **Image cache policy (one immutable URL per file).** Because a file IS one
+    immutable blob (no versions), its bytes never change for its lifetime, so the
+    by-id URLs `/api/files/:id/download`, `/api/files/:id/thumbnail`, the plugin
+    serving routes (`/api/files/:id/*rest`, `/i/:id/*rest`), and the public
+    `/i/:id` are ALL served **`immutable`** (1-year, no
+    revalidation) in production, with a strong `ETag` (the content hash, honoring
+    `If-None-Match` → 304). One `imageCacheControl(ctx)` helper (in
+    `server/render-response.js`) drives every route — there is no more
+    version-pinned-vs-bare duality. The one thing that can break the immutable
+    promise is **re-running extraction locally** (a plugin/`sharp` change rewrites
+    a thumbnail for the same file), so **dev mode never sends `immutable`** — a
+    `dev` config flag (`--dev` / `GEMME_DEV`, threaded to `ctx.dev`; the repo's
+    `npm run dev` sets it) forces `no-cache`. Tradeoff on the public routes:
+    revoking public access (collection → private, or file delete) won't reach
+    already-cached CDN/browser copies until the max-age expires — edge access
+    control is best-effort, the accepted cost of long-lived caching.
+    Files: `server/render-response.js` (`imageCacheControl`), `server/routes/files.js`,
+    `server/routes/public.js`, `lib/config.js` (`dev`), `server/index.js` (`ctx.dev`);
+    tests: `server/test/thumbnail.test.js`, `server/test/http-public.test.js`.
 - **Config loader:** `server/src/plugins/config.js` `loadPluginRegistry(dataDir)`
   dynamic-imports `<dataDir>/gemme.config.js` by file URL, so its plugin imports
   resolve against the instance's own `node_modules`.
@@ -338,18 +384,17 @@ packages/
   `PATCH /api/collections/:id {visibility}`; the `/collections` manager has a
   make-public/private button + badge, the sidebar shows a dot, and a public file's
   detail page shows its `/i/:id` URL + a copyable `srcset` snippet. **Public
-  routes** (`server/routes/public.js`, unauthenticated) serve the **current
-  version only**, 404 (never 403) for non-public/missing:
-  - `GET /i/:id` → original bytes (any type).
-  - `GET /i/:id/:spec` → an image rendition, e.g. `/i/42/w=800,fit=cover.webp`.
-    Output format is the **extension**; params (`w,h,fit,q`) are comma-separated
-    and clamped by the renderer's `normalize` (w/h ≤ 4096, q 1–100). Goes through
-    the same rendition engine + variant cache as thumbnails.
-  - **Cache:** stable by-id URLs (no content hash), so not immutable — strong ETag
-    (`"<hash>-<sig>"`) + `public, max-age=300, stale-while-revalidate=604800`
-    (dev: `no-cache`), honoring `If-None-Match` → 304. A new current version
-    changes the hash → the ETag, so CDNs/browsers revalidate. Shared streaming
-    helper: `server/render-response.js`.
+  routes** (unauthenticated), 404 (never 403) for non-public/missing:
+  - `GET /i/:id` (`server/routes/public.js`) → original bytes (any type).
+  - `GET /i/:id/*rest` (`server/routes/serving.js`) → plugin serving by extension
+    dispatch: an image rendition `/i/42/w=800,fit=cover.webp` (params `w,h,fit,q`
+    clamped w/h ≤ 4096, q 1–100), or the public HLS stream `/i/42/master.m3u8` →
+    `/i/42/360p/seg_000.ts`. Same engine + caches as the authenticated
+    `/api/files/:id/*rest`.
+  - **Cache:** `immutable` (1-year) in prod / `no-cache` in dev, strong ETag
+    (`"<hash>"` / `"<hash>-<sig>"`), honoring `If-None-Match` → 304 — the same
+    `imageCacheControl` policy as the auth routes (a file's bytes never change).
+    Shared streaming helper: `server/render-response.js`.
 - **Membership API is bulk (one collection × many files).**
   `POST` / `DELETE /api/collections/:id/files` with `{ fileIds }` add/remove a
   **set** of files to/from one collection in a single transaction, and work for
@@ -423,7 +468,7 @@ packages/
 - **Live updates (no refresh):** the file grid is a pure function of
   `query -> items`. The client (`<gemme-files>`) re-runs its current query and
   **reconciles cards by file id** (updating only those whose signature —
-  thumbnail/version/status/size/name — changed, so unchanged thumbnails don't
+  thumbnail/status/size/name — changed, so unchanged thumbnails don't
   reload). Two triggers funnel into one `refresh()`: query changes
   (`<gemme-search>` → `gemme:query`) and data changes pushed over **SSE**
   (`GET /api/events`, plain `text/event-stream` on node:http). Write routes and
@@ -450,31 +495,40 @@ packages/
 - `lib/db/` — `index.js` (single `node:sqlite` access point), `migrate.js` (applies
   `migrations/*.sql` in filename order, tracked in `schema_migrations`), `migrations/*.sql`.
   Migrations are a **consolidated baseline** (001 core → 002 sessions → 003 metadata+jobs
-  → 004 collections): since nothing is deployed yet, early `ALTER TABLE`s were folded back
-  into the original `CREATE TABLE`s for a clean starting point. Add new schema changes as
-  new numbered migrations from here — don't rewrite the baseline once there's real data.
-- `lib/storage/` — `blobs.js` (content-addressed, SHA-256), `derived.js` (thumbnails).
+  → 004 collections) plus incremental additions (005 stream_type): since nothing is
+  deployed yet, early `ALTER TABLE`s were folded back into the original `CREATE TABLE`s
+  for a clean starting point. Add new schema changes as new numbered migrations from here.
+- `lib/storage/` — `blobs.js` (content-addressed, SHA-256; Range-capable read
+  stream), `derived.js` (single-file variants + directory **bundles** for HLS).
 - `lib/auth/` — `passwords.js` (scrypt), `users.js`, `sessions.js`.
-- `lib/files.js` — file/version data layer + versioning rules.
+- `lib/files.js` — file data layer (create/get/list/soft-delete + dedup).
 - `lib/collections.js` — collection tree + closure maintenance + membership.
 - `lib/facets.js` — distinct-value + count aggregation per metadata key.
-- `lib/renditions.js` — rendition engine (renderer selection, spec parse, cache
-  key, generate-or-cache; thumbnails + public transforms share it).
+- `lib/serving.js` — the unified serving engine (`servingFor`, `makeServingApi`
+  with rendition/member/bytes/buildBundle, `specSig`, lazy `makeSource`,
+  `thumbnailFor`/`getThumbnail`). Absorbed the old `renditions.js` + `bundles.js`.
 - `lib/bus.js` — in-process `change` pub/sub shared by routes + worker + SSE.
 - `lib/metadata/` — `core.js` (shared core-metadata), `store.js` (typed EAV + FTS;
-  `indexVersionCore` for upload-time indexing).
+  `indexFileCore` for upload-time indexing).
 - `lib/search/` — `dsl.js` (parse/compile), `compose.js` (state⇄string⇄URL),
   `search.js` (`searchFiles`, `paginatedSearch`).
-- `lib/plugins/` — `registry.js` (`PluginRegistry` + apiVersion check), `config.js` (loader).
-- `worker/` — `extract.js` (core + plugin merge + `pregenerateRenditions`),
-  `queue.js`, `index.js` (`ExtractionWorker`, `runPending`; emits `change`;
-  requires an explicit registry). Top-level (not a util); imports from `../lib/…`.
-- `server/` — `index.js` (createApp; threads `registry` onto `ctx`), `router.js`,
-  `respond.js`, `render-response.js` (shared rendition streaming + 304),
-  `middleware.js`, `upload.js`,
-  `routes/{auth,files,search,pages,events,facets,collections,public}.js`.
-- `web/` — `render.js` + `public/{app.js,styles.css}`; `<gemme-files>` does
-  keyed reconciliation + SSE, `<gemme-search>` emits query events.
+- `lib/plugins/` — `registry.js` (`PluginRegistry` + apiVersion check + `capability`/
+  `get` lookups), `config.js` (loader).
+- `worker/` — `extract.js` (core + plugin merge + `pregenerateArtifacts`:
+  thumbnail + `serving.pregenerate` bundle), `queue.js`, `index.js`
+  (`ExtractionWorker`, `runPending`; emits `change`; requires an explicit
+  registry). Imports from `../lib/…`.
+- `server/` — `index.js` (createApp; threads `registry` onto `ctx`; registers
+  `routes/serving.js` LAST), `router.js` (`:name` + `*name` wildcard),
+  `respond.js`, `render-response.js` (shared Range-aware `streamBytes` + media
+  cache policy + 304), `middleware.js`, `upload.js`,
+  `routes/{auth,files,search,pages,events,facets,collections,public,serving}.js`
+  (`serving.js` = the `*rest` extension-dispatch routes; `pages.js` also serves
+  `/plugin-assets/:id/*`).
+- `web/` — `render.js` (`renderDetail` injects the plugin's `preview` HTML;
+  `previewHelpers`) + `public/{app.js,styles.css}`; `<gemme-files>` does keyed
+  reconciliation + SSE, `<gemme-search>` emits query events. No per-format player
+  code in core — plugin-video ships its own `player.js` + `hls.js` under `assets/`.
 - Tests live in each package's `test/`; `server/test/helpers/` boots an ephemeral
   app and provides a `fakeRegistry()` so server tests don't depend on the real
   plugin packages (those are tested in their own packages).
@@ -484,9 +538,13 @@ packages/
 - `@gemme/*` packages are **not published to npm** yet, so `gemme init` with a
   real install only works once published; today the working path is the in-repo
   dev instance (workspace symlinks). Publishing is a future step.
-- Thumbnails exist for **images** (plugin-image via sharp). Video/PDF/etc.
-  thumbnails are future plugins — they just need to return a `thumbnail` from
-  `extract()`; the derived-store + serving machinery already handles them.
+- Thumbnails exist for **images** (sharp), **video** (ffmpeg poster frame), and
+  **audio** (a shipped default image). PDF/etc. are future plugins — they just add
+  a `thumbnail` capability; the derived-store + serving machinery already handles it.
+- **HLS is VOD, pre-generated** on upload in the in-process worker; a long
+  transcode occupies the worker until it finishes (fine for a single box; a
+  dedicated queue/concurrency is a future step). Non-web **audio** transcode
+  (e.g. flac→mp3) is deferred — audio v1 is progressive Range over native formats.
 
 ## Use cases
 

@@ -1,4 +1,11 @@
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PluginRegistry } from '../../src/lib/plugins/registry.js';
+
+// A directory of real files the fake `video` plugin advertises as its `assets`,
+// so the generic /plugin-assets/:id/* serving route can be exercised.
+const FIXTURE_ASSETS = fileURLToPath(new URL('../fixtures/assets/', import.meta.url));
 
 // Minimal PNG dimension read (tests use PNG buffers only).
 function pngSize(buf) {
@@ -10,16 +17,17 @@ function pngSize(buf) {
 
 /**
  * A registry of inline fake plugins that stand in for the real plugin packages.
- * The server test suite exercises the extraction/merge/search *machinery*, not
- * the real plugins (those are tested in @gemme/plugin-text / -image). These
- * fakes mimic just enough behavior for those tests.
+ * The server test suite exercises the serving/extraction *machinery*, not the
+ * real plugins (those are tested in @gemme/plugin-*). These fakes implement just
+ * enough of each capability (extract / thumbnail / preview / renderer / streamer
+ * / assets) to drive the core, with deterministic bytes and no ffmpeg/sharp.
  */
 export function fakeRegistry() {
   const text = {
     id: 'text',
     matches: (mime, filename) => /^text\//.test(mime || '') || /\.(txt|md)$/i.test(filename || ''),
-    async extract({ buffer }) {
-      const body = buffer.toString('utf8');
+    async extract({ loadBuffer }) {
+      const body = (await loadBuffer()).toString('utf8');
       return {
         metadata: [
           { key: 'char_count', value: body.length, type: 'number' },
@@ -30,11 +38,12 @@ export function fakeRegistry() {
       };
     },
   };
+
   const image = {
     id: 'image',
     matches: (mime) => /^image\//.test(mime || ''),
-    async extract({ buffer }) {
-      const size = pngSize(buffer);
+    async extract({ loadBuffer }) {
+      const size = pngSize(await loadBuffer());
       if (!size) return { metadata: [] };
       return {
         metadata: [
@@ -44,34 +53,86 @@ export function fakeRegistry() {
         ],
       };
     },
-    // Fake renderer for the rendition engine: no real decoding — just emits
-    // deterministic, format-tagged bytes so route/cache/visibility logic can be
-    // tested without sharp. (Real resizing is tested in @gemme/plugin-image.)
-    renderer: {
+    // The single pre-generated thumbnail: deterministic bytes, no sharp.
+    thumbnail: {
+      contentType: 'image/webp',
+      async generate() {
+        return Buffer.from('THUMB:image');
+      },
+    },
+    preview: (file, h) => {
+      let html = `<img src="${h.url.download()}" alt="">`;
+      if (h.isPublic) {
+        // Mirror the real plugin-image: a copyable srcset snippet for public images.
+        html += `<pre class="snippet">${h.escapeHtml(`srcset="${h.url.publicServe('w=800.webp')} 800w"`)}</pre>`;
+      }
+      return html;
+    },
+    // Serving: the on-the-fly image transform service (deterministic tagged bytes,
+    // no sharp) — exercises the extension-dispatch + variant-cache machinery.
+    serving: {
       formats: ['webp', 'jpg', 'jpeg', 'png', 'avif'],
-      thumbnail: { width: 512, format: 'webp' },
-      normalize(params) {
+      async serve({ segments, ext }, api) {
+        const encoder = ext === 'jpg' ? 'jpeg' : ext;
+        const base = segments[segments.length - 1].replace(/\.[^.]+$/, '');
+        const params = {};
+        for (const tok of base.split(',')) {
+          const i = tok.indexOf('=');
+          if (i !== -1) params[tok.slice(0, i)] = tok.slice(i + 1);
+        }
         const spec = {};
         const w = Number.parseInt(params.w, 10);
-        const h = Number.parseInt(params.h, 10);
-        const q = Number.parseInt(params.q, 10);
+        const hh = Number.parseInt(params.h, 10);
         if (Number.isFinite(w)) spec.width = Math.min(4096, Math.max(1, w));
-        if (Number.isFinite(h)) spec.height = Math.min(4096, Math.max(1, h));
+        if (Number.isFinite(hh)) spec.height = Math.min(4096, Math.max(1, hh));
         if (params.fit != null) {
           if (!['cover', 'contain', 'inside'].includes(params.fit)) throw new Error(`invalid fit: ${params.fit}`);
           spec.fit = params.fit;
         }
-        if (Number.isFinite(q)) spec.quality = Math.min(100, Math.max(1, q));
-        return spec;
-      },
-      async run(source, spec) {
-        const encoder = spec.format === 'jpg' ? 'jpeg' : spec.format;
-        return {
-          data: Buffer.from(`RENDITION:${encoder}:${spec.width ?? ''}x${spec.height ?? ''}`),
-          contentType: `image/${encoder}`,
-        };
+        return api.rendition({ spec }, ext, `image/${encoder}`, async () =>
+          Buffer.from(`RENDITION:${encoder}:${spec.width ?? ''}x${spec.height ?? ''}`)
+        );
       },
     },
   };
-  return new PluginRegistry().register(text).register(image);
+
+  const video = {
+    id: 'video',
+    matches: (mime, filename) => /^video\//.test(mime || '') || /\.(mp4|mov|mkv|webm)$/i.test(filename || ''),
+    async extract() {
+      return { metadata: [{ key: 'duration', value: 5, type: 'number' }] };
+    },
+    thumbnail: {
+      contentType: 'image/webp',
+      async generate() {
+        return Buffer.from('THUMB:video');
+      },
+    },
+    preview: (file, h) => `<video controls data-hls="${h.url.serve('master.m3u8')}"></video>`,
+    // A fake HLS bundle: pregenerate writes a canned master + one variant
+    // playlist + segment; serve reads members back. No ffmpeg.
+    serving: {
+      formats: ['m3u8', 'ts'],
+      version: 1,
+      async serve({ segments, ext }, api) {
+        const ct = ext === 'm3u8' ? 'application/vnd.apple.mpegurl' : ext === 'ts' ? 'video/mp2t' : null;
+        return api.member(segments.join('/'), ct);
+      },
+      async pregenerate({ source }, api) {
+        await api.buildBundle(async (outDir) => {
+          await fsp.mkdir(path.join(outDir, '0'), { recursive: true });
+          await fsp.writeFile(
+            path.join(outDir, 'master.m3u8'),
+            '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\n0/index.m3u8\n'
+          );
+          await fsp.writeFile(path.join(outDir, '0', 'index.m3u8'), '#EXTM3U\nseg_000.ts\n');
+          await fsp.writeFile(path.join(outDir, '0', 'seg_000.ts'), Buffer.from('SEGMENT-BYTES'));
+        });
+        return 'hls';
+      },
+    },
+    assets: FIXTURE_ASSETS,
+  };
+
+  return new PluginRegistry().register(text).register(image).register(video);
 }
